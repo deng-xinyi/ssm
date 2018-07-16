@@ -560,7 +560,7 @@ class VonMisesObservations(_Observations):
              - np.log(i0(kappas)))
             * mask[:, None, :], axis=2)
 
-    def sample_x(self, z, xhist, input=None, tag=None):
+    def sample_x(self, z, xhist, input=None, tag=None, with_noise=True):
         # TODO sample from vM distribution for class z
         D, mus, kappas = self.D, self.mus, np.exp(self.log_kappas)
         return npr.vonmises(self.mus[z], kappas[z], D)
