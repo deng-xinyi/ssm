@@ -516,3 +516,90 @@ class RecurrentRobustAutoRegressiveObservations(
     _RecurrentAutoRegressiveObservationsMixin, 
     RobustAutoRegressiveObservations):
     pass
+
+
+class VonMisesObservations(_Observations):
+    def __init__(self, K, D, M=0):
+        super(VonMisesObservations, self).__init__(K, D, M)
+        # TODO: Initialize parameter arrays
+        self.mus = npr.randn(K, D)
+        #self.log_kappas = np.log(npr.randint(1, int(1e1), size=(K, D)))
+        replace_ = False if K*D < 10 else True
+        self.log_kappas = np.log(npr.choice(range(1, 10), K*D, replace=replace_).reshape((K, D)))
+
+    @property
+    def params(self):
+        # TODO: Return a tuple of parameter arrays
+        return self.mus, self.log_kappas
+
+    @params.setter
+    def params(self, value):
+        # TODO: Set value to self parameters
+        self.mus, self.log_kappas = value
+
+    def permute(self, perm):
+        self.mus = self.mus[perm]
+        self.log_kappas = self.log_kappas[perm]
+
+    @ensure_args_are_lists
+    def initialize(self, datas, inputs=None, masks=None, tags=None):
+        # TODO: Nice to have but not necessary
+
+        pass
+
+    def log_likelihoods(self, data, input, mask, tag):
+        # TODO: This is the most important function!
+        from autograd.scipy.special import i0
+        # Compute the log likelihood of the data under each of the K classes
+        # Return a TxK array of probability of data[t] under class k
+        mus, kappas = self.mus, np.exp(self.log_kappas)
+        mask = np.ones_like(data, dtype=bool) if mask is None else mask
+
+        return np.sum(
+            (kappas*(np.cos(data[:, None, :] - mus)) - np.log(2 * np.pi)
+             - np.log(i0(kappas)))
+            * mask[:, None, :], axis=2)
+
+    def sample_x(self, z, xhist, input=None, tag=None):
+        # TODO sample from vM distribution for class z
+        D, mus, kappas = self.D, self.mus, np.exp(self.log_kappas)
+        return npr.vonmises(self.mus[z], kappas[z], D)
+
+    def m_step(self, expectations, datas, inputs, masks, tags, **kwargs):
+        from autograd.scipy.special import i0, i1
+        # import pdb; pdb.set_trace()
+
+        x = np.concatenate(datas)
+
+        weights = np.concatenate([Ez for Ez, _ in expectations])
+
+        # convert angles to 2D representation and employ closed form slns for VM
+        # https://link.springer.com/content/pdf/10.1007/s00180-011-0232-x.pdf
+        # http://suvrit.de/papers/sra_dirchap.pdf
+        # http://palaeo.spb.ru/pmlibrary/pmbooks/mardia&jupp_2000.pdf (5.3)
+        x_k = np.stack((np.sin(x), np.cos(x)), axis=1)
+        r_k = np.tensordot(weights.T, x_k, (-1, 0))
+        r_norm = np.sqrt(np.sum(r_k ** 2, 1))
+        mus_k = r_k / r_norm[:, None]
+        r_bar = r_norm / weights.sum(0)[:, None]
+
+        # ratio of bessel functions for order 2
+        # a_2 = lambda x: i1(x) / i0(x)
+
+        # truncated newton approximation with 2 iterations
+        kappa_0 = r_bar * (2 - r_bar ** 2) / (1 - r_bar ** 2)
+        kappa_1 = kappa_0 - ((i1(kappa_0)/i0(kappa_0)) - r_bar) / \
+                  (1 - (i1(kappa_0)/i0(kappa_0)) ** 2 - (i1(kappa_0)/i0(kappa_0)) / kappa_0)
+        kappa_2 = kappa_1 - ((i1(kappa_1)/i0(kappa_1)) - r_bar) / \
+                  (1 - (i1(kappa_1)/i0(kappa_1)) ** 2 - (i1(kappa_1)/i0(kappa_1)) / kappa_1)
+
+        for k in range(self.K):
+            self.mus[k] = np.arctan2(*mus_k[k])
+            # here convert to int?
+            self.log_kappas[k] = np.log(np.rint(kappa_2[k]))
+            # self.log_kappas[k] = np.log(kappa_2[k])
+
+    def smooth(self, expectations, data, input, tag):
+        # TODO: get mean value for each class
+        mus = self.mus
+        return expectations.dot(mus)

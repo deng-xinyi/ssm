@@ -15,6 +15,7 @@ from ssm.observations import \
     BernoulliObservations, \
     PoissonObservations, \
     StudentsTObservations, \
+    VonMisesObservations, \
     AutoRegressiveObservations, \
     RobustAutoRegressiveObservations, \
     RecurrentAutoRegressiveObservations, \
@@ -43,18 +44,6 @@ def HMM(K, D, M=0,
         observation_kwargs=None,
         hierarchical_observation_tags=None,
         **kwargs):
-    """
-    Construct an HMM object with the appropriate observations 
-    and dynamics. 
-
-    :param K: number of discrete latent states
-    :param D: observation dimension
-    :param M: input dimension
-    :param observations: conditional distribution of the data 
-    :param recurrent: whether or not past observations influence transitions probabilities.
-    :param recurrent_only: if true, _only_ the past observations influence transitions. 
-    """
-
     # Make the initial state distribution
     init_state_distn = InitialStateDistribution(K, D, M=M)
 
@@ -89,6 +78,7 @@ def HMM(K, D, M=0,
         t=StudentsTObservations,
         poisson=PoissonObservations,
         bernoulli=BernoulliObservations,
+        vonmises=VonMisesObservations,
         ar=RecurrentAutoRegressiveObservations if is_recurrent else AutoRegressiveObservations,
         autoregressive=RecurrentAutoRegressiveObservations if is_recurrent else AutoRegressiveObservations,
         robust_ar=RecurrentRobustAutoRegressiveObservations if is_recurrent else RobustAutoRegressiveObservations,
