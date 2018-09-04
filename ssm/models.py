@@ -18,6 +18,7 @@ from ssm.observations import \
     StudentsTObservations, \
     VonMisesObservations, \
     AutoRegressiveObservations, \
+    IndependentAutoRegressiveObservations, \
     RobustAutoRegressiveObservations, \
     RecurrentAutoRegressiveObservations, \
     RecurrentRobustAutoRegressiveObservations
@@ -83,6 +84,7 @@ def HMM(K, D, M=0,
         poisson=PoissonObservations,
         ar=RecurrentAutoRegressiveObservations if is_recurrent else AutoRegressiveObservations,
         autoregressive=RecurrentAutoRegressiveObservations if is_recurrent else AutoRegressiveObservations,
+        independent_ar=IndependentAutoRegressiveObservations,
         robust_ar=RecurrentRobustAutoRegressiveObservations if is_recurrent else RobustAutoRegressiveObservations,
         robust_autoregressive=RecurrentRobustAutoRegressiveObservations if is_recurrent else RobustAutoRegressiveObservations,
         )
