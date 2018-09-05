@@ -744,24 +744,19 @@ class RecurrentRobustAutoRegressiveObservations(
     pass
 
 
-<<<<<<< HEAD
 class VonMisesObservations(_Observations):
     def __init__(self, K, D, M=0):
         super(VonMisesObservations, self).__init__(K, D, M)
-        # TODO: Initialize parameter arrays
         self.mus = npr.randn(K, D)
-        #self.log_kappas = np.log(npr.randint(1, int(1e1), size=(K, D)))
-        replace_ = False if K*D < 10 else True
-        self.log_kappas = np.log(npr.choice(range(1, 10), K*D, replace=replace_).reshape((K, D)))
+        max_k = 9
+        self.log_kappas = np.log(-1*npr.uniform(low=-1*max_k, high=0, size=(K, D)))
 
     @property
     def params(self):
-        # TODO: Return a tuple of parameter arrays
         return self.mus, self.log_kappas
 
     @params.setter
     def params(self, value):
-        # TODO: Set value to self parameters
         self.mus, self.log_kappas = value
 
     def permute(self, perm):
@@ -770,17 +765,40 @@ class VonMisesObservations(_Observations):
 
     @ensure_args_are_lists
     def initialize(self, datas, inputs=None, masks=None, tags=None):
-        # TODO: Nice to have but not necessary
+        from spherecluster import SphericalKMeans
+        from autograd.scipy.special import i0, i1
 
-        pass
+        data = np.concatenate(datas.copy())
+
+        x_k = np.stack((np.sin(data.flatten()), np.cos(data.flatten())), axis=1)
+        skm = SphericalKMeans(self.K).fit(x_k)
+
+        # Ratio of bessel functions
+        a_2 = lambda x: i1(x) / i0(x)
+
+        # Estimate parameters for each component
+        for k in range(self.K):
+            self.mus[k] = np.double(np.arctan2(*skm.cluster_centers_[k]))
+            x = data[skm.labels_ == k]
+            x_k = np.stack((np.sin(x), np.cos(x)), axis=1)
+            r_bar = np.sqrt((np.sum(x_k, 0) ** 2).sum()) / x.shape[0]
+
+            kappa_0 = r_bar * (2 - r_bar ** 2) / (1 - r_bar ** 2)
+            kappa_1 = kappa_0 - (a_2(kappa_0) - r_bar) / (1 - a_2(kappa_0) ** 2 - a_2(kappa_0) / kappa_0)
+            kappa_2 = kappa_1 - (a_2(kappa_1) - r_bar) / (1 - a_2(kappa_1) ** 2 - a_2(kappa_1) / kappa_1)
+
+            self.log_kappas[k] = np.log(kappa_2)
+
 
     def log_likelihoods(self, data, input, mask, tag):
-        # TODO: This is the most important function!
         from autograd.scipy.special import i0
         # Compute the log likelihood of the data under each of the K classes
         # Return a TxK array of probability of data[t] under class k
         mus, kappas = self.mus, np.exp(self.log_kappas)
         mask = np.ones_like(data, dtype=bool) if mask is None else mask
+
+
+        #import pdb; pdb.set_trace()
 
         return np.sum(
             (kappas*(np.cos(data[:, None, :] - mus)) - np.log(2 * np.pi)
@@ -788,7 +806,6 @@ class VonMisesObservations(_Observations):
             * mask[:, None, :], axis=2)
 
     def sample_x(self, z, xhist, input=None, tag=None, with_noise=True):
-        # TODO sample from vM distribution for class z
         D, mus, kappas = self.D, self.mus, np.exp(self.log_kappas)
         return npr.vonmises(self.mus[z], kappas[z], D)
 
@@ -798,14 +815,18 @@ class VonMisesObservations(_Observations):
 
         x = np.concatenate(datas)
 
+        #print('Begin M step')
         weights = np.concatenate([Ez for Ez, _ in expectations])
 
+        #print('manipulation')
         # convert angles to 2D representation and employ closed form slns for VM
         # https://link.springer.com/content/pdf/10.1007/s00180-011-0232-x.pdf
         # http://suvrit.de/papers/sra_dirchap.pdf
         # http://palaeo.spb.ru/pmlibrary/pmbooks/mardia&jupp_2000.pdf (5.3)
         x_k = np.stack((np.sin(x), np.cos(x)), axis=1)
+
         r_k = np.tensordot(weights.T, x_k, (-1, 0))
+
         r_norm = np.sqrt(np.sum(r_k ** 2, 1))
         mus_k = r_k / r_norm[:, None]
         r_bar = r_norm / weights.sum(0)[:, None]
@@ -815,6 +836,7 @@ class VonMisesObservations(_Observations):
 
         # truncated newton approximation with 2 iterations
         kappa_0 = r_bar * (2 - r_bar ** 2) / (1 - r_bar ** 2)
+
         kappa_1 = kappa_0 - ((i1(kappa_0)/i0(kappa_0)) - r_bar) / \
                   (1 - (i1(kappa_0)/i0(kappa_0)) ** 2 - (i1(kappa_0)/i0(kappa_0)) / kappa_0)
         kappa_2 = kappa_1 - ((i1(kappa_1)/i0(kappa_1)) - r_bar) / \
@@ -822,13 +844,11 @@ class VonMisesObservations(_Observations):
 
         for k in range(self.K):
             self.mus[k] = np.arctan2(*mus_k[k])
-            # here convert to int?
-            self.log_kappas[k] = np.log(np.rint(kappa_2[k]))
-            # self.log_kappas[k] = np.log(kappa_2[k])
+            # here convert to int
+            #self.log_kappas[k] = np.log(np.rint(kappa_2[k]))
+            self.log_kappas[k] = np.log(kappa_2[k])
 
     def smooth(self, expectations, data, input, tag):
         # TODO: get mean value for each class
         mus = self.mus
         return expectations.dot(mus)
-=======
->>>>>>> origin/master

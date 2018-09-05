@@ -5,8 +5,7 @@ from autograd.scipy.misc import logsumexp
 from autograd.extend import primitive, defvjp
 from functools import partial
 
-#from ssm.messages import forward_pass, backward_pass, grad_hmm_normalizer
-from .messages import forward_pass, backward_pass, backward_sample, grad_hmm_normalizer
+from ssm.messages import forward_pass, backward_pass, grad_hmm_normalizer
 
 @primitive
 def hmm_normalizer(log_pi0, log_Ps, ll):
