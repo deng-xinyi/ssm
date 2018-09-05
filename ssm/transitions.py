@@ -406,3 +406,48 @@ class NeuralNetworkRecurrentTransitions(_Transitions):
         return log_Ps - logsumexp(log_Ps, axis=2, keepdims=True)
 
 
+class DistanceDependentTransitions(_Transitions):
+    """
+    In this model the transition probability depends on the distance
+    between the latent locations associated with each discrete state.
+
+    Specifically, each state k has a location, \ell_k \in R^J, and 
+    the probability of transitioning is 
+
+        Pr(z_t = k | z_{t-1} = k') 
+             \propto exp(-||\ell_k - \ell_{k'}||/L)   if k \neq k'
+             \propto p_kk                             if k = k'
+
+    where L is a length scale that we treat as a hyperparameter. 
+    """
+    def __init__(self, K, D, M=0, L=1, J=2):
+        super(DistanceDependentTransitions, self).__init__(K, D, M=M)
+        self.L = L
+
+        # Initialize the parameters
+        self.ell = npr.randn((K, J))
+        self.log_p = np.zeros(K)
+        
+    @property
+    def params(self):
+        return self.ell, self.log_p
+    
+    @params.setter
+    def params(self, value):
+        self.ell, self.log_p = value
+
+    def permute(self, perm):
+        """
+        Permute the discrete latent states.
+        """
+        self.ell = self.ell[perm]
+        self.log_p = self.log_p[perm]
+
+    def log_transition_matrices(self, data, input, mask, tag):
+        T = data.shape[0]
+        # TODO: Construct the KxK log transition matrix
+        log_P = ...
+        # Tile the transition matrix for each time step 
+        log_Ps = np.tile(log_P[None, :, :], (T-1, 1, 1))
+        # Normalize and return
+        return log_Ps - logsumexp(log_Ps, axis=2, keepdims=True)
