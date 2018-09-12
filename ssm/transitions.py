@@ -447,8 +447,7 @@ class DistanceDependentTransitions(_Transitions):
         # TODO: Construct the KxK log transition matrix
         ncoord = np.array(self.ell)
         Ps_dist = np.sqrt(((ncoord[:, :, None] - ncoord[:, :, None].T) ** 2).sum(1))
-        Ps = np.exp(-Ps_dist/self.L)
-        np.fill_diagonal(Ps, np.exp(self.log_p))
+        Ps = np.exp(-Ps_dist/self.L) - np.diag(np.ones(Ps_dist.shape[0])) + np.diag(np.exp(self.log_p))
         Ps /= Ps.sum(axis=1, keepdims=True)
         log_P = np.log(Ps)
         # Tile the transition matrix for each time step 
