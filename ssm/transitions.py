@@ -448,7 +448,7 @@ class DistanceDependentTransitions(_Transitions):
         ncoord = np.array(self.ell)
         Ps_dist = np.sqrt(((ncoord[:, :, None] - ncoord[:, :, None].T) ** 2).sum(1))
         Ps = np.exp(-Ps_dist/self.L)
-        Ps += np.diag(np.exp(self.log_p))
+        np.fill_diagonal(Ps, np.exp(self.log_p))
         Ps /= Ps.sum(axis=1, keepdims=True)
         log_P = np.log(Ps)
         # Tile the transition matrix for each time step 
