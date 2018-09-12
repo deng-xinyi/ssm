@@ -12,8 +12,6 @@ from ssm.util import ensure_args_are_lists, ensure_args_not_none, \
     ensure_elbo_args_are_lists, adam_with_convergence_check, one_hot, \
     logistic
 
-from scipy.spatial.distance import pdist,squareform
-
 class _Transitions(object):
     def __init__(self, K, D, M=0):
         self.K, self.D, self.M = K, D, M
@@ -447,8 +445,10 @@ class DistanceDependentTransitions(_Transitions):
     def log_transition_matrices(self, data, input, mask, tag):
         T = data.shape[0]
         # TODO: Construct the KxK log transition matrix
-        Ps = np.exp(-pdist(np.array(self.ell), 'euclidean')/self.L)
-        Ps = squareform(Ps) + np.diag(np.exp(self.log_p))
+        ncoord = np.array(self.ell)
+        Ps_dist = np.sqrt(((ncoord[:, :, None] - ncoord[:, :, None].T) ** 2).sum(1))
+        Ps = np.exp(-Ps_dist/self.L)
+        Ps += np.diag(np.exp(self.log_p))
         Ps /= Ps.sum(axis=1, keepdims=True)
         log_P = np.log(Ps)
         # Tile the transition matrix for each time step 
