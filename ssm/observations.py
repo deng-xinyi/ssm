@@ -743,4 +743,33 @@ class RecurrentRobustAutoRegressiveObservations(
     RobustAutoRegressiveObservations):
     pass
 
+#for clusterless encoder
+"""
+TO-DO: joint mark intensity
+"""
+class MarkedPointProcessObservations(_Observations):
+    def __init__(self, K, D, M=0):
+        super(MarkedPointProcessObservations, self).__init__(K, D, M)
+        self.log_lambdas = npr.randn(K, D)
+        
+    @property
+    def params(self):
+        return self.log_lambdas
+    
+    @params.setter
+    def params(self, value):
+        self.log_lambdas = value
+        
+    def permute(self, perm):
+        self.log_lambdas = self.log_lambdas[perm]
+        
+    @ensure_args_are_lists
+    def initialize(self, datas, inputs=None, masks=None, tags=None):
+           
+    def log_likelihoods(self, data, input, mask, tag):
+
+    def sample_x(self, z, xhist, input=None, tag=None, with_noise=True):
+        #lambdas = np.exp(self.inv_lambdas)
+        #return npr.poisson(lambdas[z])
+
 
