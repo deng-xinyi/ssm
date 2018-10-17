@@ -748,28 +748,89 @@ class RecurrentRobustAutoRegressiveObservations(
 TO-DO: joint mark intensity
 """
 class MarkedPointProcessObservations(_Observations):
-    def __init__(self, K, D, M=0):
-        super(MarkedPointProcessObservations, self).__init__(K, D, M)
-        self.log_lambdas = npr.randn(K, D)
+    def __init__(self, K, D, M=0, N=4):
+        super(MarkedPointProcessObservations, self).__init__(K, D, M=M)
+        self.D = D
+        self.N = N
+        self.logit_ps = npr.randn(K, D) # ground intensity by tetrode, e.g. location
+        self.mus = npr.randn(K, D, N) # mark mean
+        self.inv_sigmas = -2 + npr.randn(K, D, N) # mark log variance
         
     @property
     def params(self):
-        return self.log_lambdas
+        return self.logit_ps, self.mus, self.inv_sigmas
     
     @params.setter
     def params(self, value):
-        self.log_lambdas = value
+        self.logit_ps, self.mus, self.inv_sigmas = value
         
     def permute(self, perm):
-        self.log_lambdas = self.log_lambdas[perm]
+        self.logit_ps = self.logit_ps[perm]
+        self.mus = self.mus[perm]
+        self.inv_sigmas = self.inv_sigmas[perm]
         
     @ensure_args_are_lists
     def initialize(self, datas, inputs=None, masks=None, tags=None):
-           
-    def log_likelihoods(self, data, input, mask, tag):
+        # Initialize with KMeans
+        from sklearn.cluster import KMeans
+        data = datas[:, :, 0]
+        km = KMeans(self.K).fit(data)
+        self.log_lambdas = np.log(km.cluster_centers_ + 1e-3)     
+        
+    def log_likelihoods(self, datas, input, mask, tag):
+        # datas in T by D by N+1        
+        mus, sigmas = self.mus, np.exp(self.inv_sigmas) # K by D by N
+        
+        data = datas[:, :, 0] # spike train, T by D
+        marks = datas[:, :, 1:] # marks, T by D by N
+        
+        log_normpdf = -0.5 * (marks[:, None, :, :] - mus)**2 / sigmas - 0.5 * np.log(2 * np.pi * sigmas) # T by K by D by N
+        log_normpdf = np.sum(log_normpdf, axis=3) # T by K by D
+              
+        # Bernoulli,
+        ### no spike, lambdas
+        ### yes spikes, kernel
+        
+        ps = logistic(self.logit_ps)
+        mask = np.ones_like(data, dtype=bool) if mask is None else mask
+        lls = data[:, None, :] * np.log(ps) + (1 - data[:, None, :]) * np.log(1 - ps)
+        ### T by K by D
+        lls += data[:, None, :] * log_normpdf # if spike
+        ### we are adding mark probability if spike
+        return np.sum(lls * mask[:, None, :], axis=2) # T by K
+        ### summing out tetrode dimension only if mask = 1
 
     def sample_x(self, z, xhist, input=None, tag=None, with_noise=True):
-        #lambdas = np.exp(self.inv_lambdas)
-        #return npr.poisson(lambdas[z])
+        ## no spike, sample from Bernoulli
+        ## yes spike, sample from Gaussian
 
+        ps = 1 / (1 + np.exp(self.logit_ps))
+        D, N, mus = self.D, self.N, self.mus
+        sigmas = np.exp(self.inv_sigmas) if with_noise else np.zeros((self.K, self.D))        
+        
+        spikes_x =  npr.rand(self.D) < ps[z]
+        marks_x = mus[z] + np.sqrt(sigmas[z]) * npr.randn(D, N)
+        
+        return spikes_x[:, None] * marks_x
+
+    def m_step(self, expectations, datas, inputs, masks, tags, **kwargs):
+        ### a combination of Bernoulli and Gaussian                
+        spikes_x = np.concatenate(datas[:, :, 0])        
+        marks_x = np.concatenate(datas[:, :, 1:])
+        weights = np.concatenate([Ez for Ez, _ in expectations])
+        for k in range(self.K):
+            ### Bernoulli
+            ps = np.clip(np.average(spikes_x, axis=0, weights=weights[:, :, k]), 1e-3, 1-1e-3)
+            self.logit_ps[k] = logit(ps)
+            ### Gaussian
+            self.mus[k] = np.average(marks_x, axis=0, weights=weights[:, :, k])
+            sqerr = (marks_x - self.mus[k])**2
+            self.inv_sigmas[k] = np.log(np.average(sqerr, weights=weights[:, :, k], axis=0))
+            
+    def smooth(self, expectations, data, input, tag):
+        """
+        Compute the mean observation under the posterior distribution
+        of latent discrete states.
+        """
+        return expectations.dot(np.exp(self.log_lambdas))
 
