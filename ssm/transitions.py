@@ -424,7 +424,7 @@ class DistanceDependentTransitions(_Transitions):
         self.L = L
 
         # Initialize the parameters
-        self.ell = npr.randn((K, J))
+        self.ell = npr.randn(K, J)
         self.log_p = np.zeros(K)
         
     @property
