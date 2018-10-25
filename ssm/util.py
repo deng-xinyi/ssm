@@ -84,21 +84,24 @@ def random_rotation(n, theta=None):
 
 def ensure_args_are_lists(f):
     def wrapper(self, datas, inputs=None, masks=None, tags=None, **kwargs):
-        datas = [datas] if not isinstance(datas, list) else datas
+        datas = [datas] if not isinstance(datas, (list, tuple)) else datas
         
+        M = (self.M,) if isinstance(self.M, int) else self.M
+        assert isinstance(M, tuple)
+
         if inputs is None:
-            inputs = [np.zeros((data.shape[0], self.M)) for data in datas]
-        elif not isinstance(inputs, list):
+            inputs = [np.zeros((data.shape[0],) + M) for data in datas]
+        elif not isinstance(inputs, (list, tuple)):
             inputs = [inputs]
 
         if masks is None:
             masks = [np.ones_like(data, dtype=bool) for data in datas]
-        elif not isinstance(masks, list):
+        elif not isinstance(masks, (list, tuple)):
             masks = [masks]
 
         if tags is None:
             tags = [None] * len(datas)
-        elif not isinstance(tags, list):
+        elif not isinstance(tags, (list, tuple)):
             tags = [tags]
 
         return f(self, datas, inputs=inputs, masks=masks, tags=tags, **kwargs)
@@ -108,21 +111,24 @@ def ensure_args_are_lists(f):
 
 def ensure_elbo_args_are_lists(f):
     def wrapper(self, variational_params, datas, inputs=None, masks=None, tags=None, **kwargs):
-        datas = [datas] if not isinstance(datas, list) else datas
+        datas = [datas] if not isinstance(datas, (list, tuple)) else datas
+
+        M = (self.M,) if isinstance(self.M, int) else self.M
+        assert isinstance(M, tuple)
         
         if inputs is None:
-            inputs = [np.zeros((data.shape[0], self.M)) for data in datas]
-        elif not isinstance(inputs, list):
+            inputs = [np.zeros((data.shape[0],) + M) for data in datas]
+        elif not isinstance(inputs, (list, tuple)):
             inputs = [inputs]
 
         if masks is None:
             masks = [np.ones_like(data, dtype=bool) for data in datas]
-        elif not isinstance(masks, list):
+        elif not isinstance(masks, (list, tuple)):
             masks = [masks]
 
         if tags is None:
             tags = [None] * len(datas)
-        elif not isinstance(tags, list):
+        elif not isinstance(tags, (list, tuple)):
             tags = [tags]
 
         return f(self, variational_params, datas, inputs=inputs, masks=masks, tags=tags, **kwargs)
@@ -133,7 +139,9 @@ def ensure_elbo_args_are_lists(f):
 def ensure_args_not_none(f):
     def wrapper(self, data, input=None, mask=None, tag=None, **kwargs):
         assert data is not None
-        input = np.zeros((data.shape[0], self.M)) if input is None else input
+        M = (self.M,) if isinstance(self.M, int) else self.M
+        assert isinstance(M, tuple)
+        input = np.zeros((data.shape[0],) + M) if input is None else input
         mask = np.ones_like(data, dtype=bool) if mask is None else mask
         return f(self, data, input=input, mask=mask, tag=tag, **kwargs)
     return wrapper
@@ -143,7 +151,9 @@ def ensure_slds_args_not_none(f):
     def wrapper(self, variational_mean, data, input=None, mask=None, tag=None, **kwargs):
         assert variational_mean is not None
         assert data is not None
-        input = np.zeros((data.shape[0], self.M)) if input is None else input
+        M = (self.M,) if isinstance(self.M, int) else self.M
+        assert isinstance(M, tuple)
+        input = np.zeros((data.shape[0],) + M) if input is None else input
         mask = np.ones_like(data, dtype=bool) if mask is None else mask
         return f(self, variational_mean, data, input=input, mask=mask, tag=tag, **kwargs)
     return wrapper
@@ -176,3 +186,41 @@ def one_hot(z, K):
     return zoh
 
 
+def relu(x):
+    return np.maximum(0, x)
+
+
+def generalized_newton_studentst_dof(E_tau, E_logtau, nu0=1, max_iter=100, nu_min=1e-3, nu_max=20, tol=1e-8, verbose=False):
+    """
+    Generalized Newton's method for the degrees of freedom parameter, nu, 
+    of a Student's t distribution.  See the notebook in the doc/students_t
+    folder for a complete derivation. 
+    """
+    from scipy.special import digamma, polygamma
+    delbo = lambda nu: 1/2 * (1 + np.log(nu/2)) - 1/2 * digamma(nu/2) + 1/2 * E_logtau - 1/2 * E_tau
+    ddelbo = lambda nu: 1/(2 * nu) - 1/4 * polygamma(1, nu/2)
+
+    dnu = np.inf
+    nu = nu0
+    for itr in range(max_iter):
+        if abs(dnu) < tol:
+            break
+            
+        if nu < nu_min or nu > nu_max:
+            warn("generalized_newton_studentst_dof fixed point grew beyond "
+                 "bounds [{},{}].".format(nu_min, nu_max))
+            nu = np.clip(nu, nu_min, nu_max)
+            break
+        
+        # Perform the generalized Newton update
+        a = -nu**2 * ddelbo(nu)
+        b = delbo(nu) - a / nu
+        assert a > 0 and b < 0, "generalized_newton_studentst_dof encountered invalid values of a,b"
+        dnu = -a / b - nu
+        nu = nu + dnu
+
+    if itr == max_iter - 1:
+        warn("generalized_newton_studentst_dof failed to converge" 
+             "at tolerance {} in {} iterations.".format(tol, itr))
+
+    return nu

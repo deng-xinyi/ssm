@@ -1,14 +1,16 @@
 import copy
 import warnings
 from functools import partial
+import tqdm
 
 import autograd.numpy as np
 import autograd.numpy.random as npr
 from autograd.scipy.misc import logsumexp
 from autograd.misc.optimizers import sgd, adam
+from autograd.tracer import getval
 from autograd import grad
 
-from ssm.primitives import hmm_normalizer, hmm_expected_states, hmm_filter
+from ssm.primitives import hmm_normalizer, hmm_expected_states, hmm_filter, viterbi
 from ssm.util import ensure_args_are_lists, ensure_args_not_none, \
     ensure_slds_args_not_none, ensure_elbo_args_are_lists, adam_with_convergence_check
 
@@ -33,7 +35,10 @@ class _HMM(object):
         self._fitting_methods = \
             dict(sgd=partial(self._fit_sgd, "sgd"),
                  adam=partial(self._fit_sgd, "adam"),
-                 em=self._fit_em)
+                 em=self._fit_em,
+                 stochastic_em=partial(self._fit_stochastic_em, "adam"),
+                 stochastic_em_sgd=partial(self._fit_stochastic_em, "sgd"),
+                 )
 
     @property
     def params(self):
@@ -66,15 +71,19 @@ class _HMM(object):
         self.observations.permute(perm)
 
     def sample(self, T, prefix=None, input=None, tag=None, with_noise=True):
-        K, D = self.K, self.D
+        K = self.K
+        D = (self.D,) if isinstance(self.D, int) else self.D
+        M = (self.M,) if isinstance(self.M, int) else self.M
+        assert isinstance(D, tuple)
+        assert isinstance(M, tuple)
 
         # If prefix is given, pad the output with it
         if prefix is None:
             pad = 1
             z = np.zeros(T+1, dtype=int)
-            data = np.zeros((T+1, D))
-            input = np.zeros((T+1, self.M)) if input is None else input
-            mask = np.ones((T+1, D), dtype=bool)
+            data = np.zeros((T+1,) + D)
+            input = np.zeros((T+1,) + M) if input is None else input
+            mask = np.ones((T+1,) + D, dtype=bool)
 
             # Sample the first state from the initial distribution
             pi0 = np.exp(self.init_state_distn.log_initial_state_distn(data, input, mask, tag))
@@ -85,12 +94,12 @@ class _HMM(object):
             zhist, xhist = prefix
             pad = len(zhist)
             assert zhist.dtype == int and zhist.min() >= 0 and zhist.max() < K
-            assert xhist.shape == (pad, D)
+            assert xhist.shape == (pad,) + D
 
             z = np.concatenate((zhist, np.zeros(T, dtype=int)))
             data = np.concatenate((xhist, np.zeros((T, D))))
-            input = np.zeros((T+pad, self.M)) if input is None else input
-            mask = np.ones((T+pad, D), dtype=bool)
+            input = np.zeros((T+pad,) + M) if input is None else input
+            mask = np.ones((T+pad,) + D, dtype=bool)
 
         # Fill in the rest of the data
         for t in range(pad, pad+T):
@@ -109,8 +118,10 @@ class _HMM(object):
 
     @ensure_args_not_none
     def most_likely_states(self, data, input=None, mask=None, tag=None):
-        Ez, _ = self.expected_states(data, input, mask, tag)
-        return np.argmax(Ez, axis=1)
+        log_pi0 = self.init_state_distn.log_initial_state_distn(data, input, mask, tag)
+        log_Ps = self.transitions.log_transition_matrices(data, input, mask, tag)
+        log_likes = self.observations.log_likelihoods(data, input, mask, tag)
+        return viterbi(log_pi0, log_Ps, log_likes)
 
     @ensure_args_not_none
     def filter(self, data, input=None, mask=None, tag=None):
@@ -125,7 +136,7 @@ class _HMM(object):
         Compute the mean observation under the posterior distribution
         of latent discrete states.
         """
-        Ez, _ = self.expected_states(data, input, mask)
+        Ez, _, _ = self.expected_states(data, input, mask)
         return self.observations.smooth(Ez, data, input, tag)
         
     def log_prior(self):
@@ -167,7 +178,7 @@ class _HMM(object):
         :return total log probability of the data.
         """
         elp = self.log_prior()
-        for (Ez, Ezzp1), data, input, mask, tag in zip(expectations, datas, inputs, masks, tags):
+        for (Ez, Ezzp1, _), data, input, mask, tag in zip(expectations, datas, inputs, masks, tags):
             log_pi0 = self.init_state_distn.log_initial_state_distn(data, input, mask, tag)
             log_Ps = self.transitions.log_transition_matrices(data, input, mask, tag)
             log_likes = self.observations.log_likelihoods(data, input, mask, tag)
@@ -175,7 +186,7 @@ class _HMM(object):
             # Compute the expected log probability 
             elp += np.sum(Ez[0] * log_pi0)
             elp += np.sum(Ezzp1 * log_Ps)
-            elp += np.sum(Ez[1:] * log_likes[1:])
+            elp += np.sum(Ez * log_likes)
             assert np.isfinite(elp)
         return elp
     
@@ -203,40 +214,86 @@ class _HMM(object):
 
         return lls
 
-    def _fit_em(self, datas, inputs, masks, tags, num_em_iters=100, verbose=True, debug=False, **kwargs):
+    def _fit_stochastic_em(self, optimizer, datas, inputs, masks, tags, num_epochs=100, **kwargs):
+        """
+        Replace the M-step of EM with a stochastic gradient update using the ELBO computed
+        on a minibatch of data. 
+        """
+        M = len(datas)
+        T = sum([data.shape[0] for data in datas])
+        
+        perm = [np.random.permutation(M) for _ in range(num_epochs)]
+        def _get_minibatch(itr):
+            epoch = itr // M
+            m = itr % M
+            i = perm[epoch][m]
+            return datas[i], inputs[i], masks[i], tags[i]
+
+        def _objective(params, itr):
+            # Grab a minibatch of data
+            data, input, mask, tag = _get_minibatch(itr)
+            Ti = data.shape[0]
+
+            # E step: compute expected latent states with current parameters
+            Ez, Ezzp1, _ = self.expected_states(data, input, mask, tag) 
+
+            # M step: set the parameter and compute the (normalized) objective function
+            self.params = params
+            log_pi0 = self.init_state_distn.log_initial_state_distn(data, input, mask, tag)
+            log_Ps = self.transitions.log_transition_matrices(data, input, mask, tag)
+            log_likes = self.observations.log_likelihoods(data, input, mask, tag)
+
+            # Compute the expected log probability 
+            # (Scale by number of length of this minibatch.)
+            obj = self.log_prior()
+            obj += np.sum(Ez[0] * log_pi0) * M
+            obj += np.sum(Ezzp1 * log_Ps) * (T - M) / (Ti - 1)
+            obj += np.sum(Ez * log_likes) * T / Ti
+            assert np.isfinite(obj)
+
+            return -obj / T
+
+        lls = []
+        pbar = tqdm.trange(num_epochs * M)
+        def _print_progress(params, itr, g):
+            epoch = itr // M
+            m = itr % M
+            lls.append(-T * _objective(params, itr))
+            pbar.set_description("Epoch {} Itr {} LP: {:.1f}".format(epoch, m, lls[-1]))
+            pbar.update(1)
+        
+        # Run the optimizer
+        optimizers = dict(sgd=sgd, adam=adam)
+        self.params = \
+            optimizers[optimizer](grad(_objective), self.params, callback=_print_progress, num_iters=num_epochs * M)
+
+        return lls
+
+    def _fit_em(self, datas, inputs, masks, tags, num_em_iters=100, **kwargs):
         """
         Fit the parameters with expectation maximization.
 
         E step: compute E[z_t] and E[z_t, z_{t+1}] with message passing;
         M-step: analytical maximization of E_{p(z | x)} [log p(x, z; theta)].
         """
-        lls = []
-        for itr in range(num_em_iters):
+        pbar = tqdm.trange(num_em_iters)
+
+        lls = [self.log_probability(datas, inputs, masks, tags)]
+        pbar.set_description("LP: {:.1f}".format(lls[-1]))
+        
+        for itr in pbar:
             # E step: compute expected latent states with current parameters
             expectations = [self.expected_states(data, input, mask, tag) 
                             for data, input, mask, tag in zip(datas, inputs, masks, tags)]
-
-            if debug:
-                el1 = self.expected_log_probability(expectations, datas, inputs, masks, tags)
-                ll1 = self.log_probability(datas, inputs, masks, tags)
 
             # M step: maximize expected log joint wrt parameters
             self.init_state_distn.m_step(expectations, datas, inputs, masks, tags, **kwargs)
             self.transitions.m_step(expectations, datas, inputs, masks, tags, **kwargs)
             self.observations.m_step(expectations, datas, inputs, masks, tags, **kwargs)
 
-            if debug: 
-                el2 = self.expected_log_probability(expectations, datas, inputs, masks, tags)
-                ll2 = self.log_probability(datas, inputs, masks, tags)
-                assert el2 >= el1 - 1e-8
-                assert ll2 >= ll1 - 1e-8
-                assert (ll2 - ll1) >= (el2 - el1) - 1e-8
-
             # Store progress
-            lls.append(self.log_probability(datas, inputs, masks, tags))
-            
-            if verbose:
-                print("Iteration {}.  LP: {:.1f}".format(itr, lls[-1]))
+            lls.append(self.log_prior() + sum([ll for (_, _, ll) in expectations]))
+            pbar.set_description("LP: {:.1f}".format(lls[-1]))
 
         return lls
 
@@ -327,13 +384,18 @@ class _SwitchingLDS(object):
                self.emissions.log_prior()
 
     def sample(self, T, input=None, tag=None):
-        K, D = self.K, self.D
-        input = np.zeros((T, self.M)) if input is None else input
-        mask = np.ones((T, D), dtype=bool)
+        K = self.K
+        D = (self.D,) if isinstance(self.D, int) else self.D
+        M = (self.M,) if isinstance(self.M, int) else self.M
+        assert isinstance(D, tuple)
+        assert isinstance(M, tuple)
+
+        input = np.zeros((T,) + M) if input is None else input
+        mask = np.ones((T,) + D, dtype=bool)
         
         # Initialize outputs
         z = np.zeros(T, dtype=int)
-        x = np.zeros((T, D))
+        x = np.zeros((T,) + D)
         
         # Sample discrete and continuous latent states
         pi0 = np.exp(self.init_state_distn.log_initial_state_distn(x, input, mask, tag))
