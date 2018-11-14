@@ -991,12 +991,19 @@ class MarkedPointProcessObservations(_Observations):
         return np.concatenate((spikes_x[:, None]*1, spikes_x[:, None] * marks_x), axis = 1)
 
     def m_step(self, expectations, datas, inputs, masks, tags, **kwargs):
+        ###
+        # expectations is now a tuple of length 3
+        # change to `weights = np.concatenate([Ez for Ez, _, _ in expectations])`
+        # (the entries are `E[z_t = k], E[z_t = k, z_{t+1}=k'], log p(x_{1:T})`)
+        ###
+        
         ### a combination of Bernoulli and Gaussian                
         spikes_x = np.concatenate(datas)[:, :, 0]     
         marks_x = np.concatenate(datas)[:, :, 1:]
-        weights = np.concatenate([Ez for Ez, _ in expectations])
+        weights = np.concatenate([Ez for Ez, _, _ in expectations])
         
-        print('weights', weights)
+        assert np.all(np.isfinite(weights))
+        
         for k in range(self.K):
             ### Bernoulli
             ps = np.clip(np.average(spikes_x, axis=0, weights=weights[:, k]), 1e-3, 1-1e-3)
