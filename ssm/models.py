@@ -16,6 +16,7 @@ from ssm.observations import \
     BernoulliObservations, \
     PoissonObservations, \
     VonMisesObservations, \
+    MarkedPointProcessObservations, \
     CategoricalObservations, \
     StudentsTObservations, \
     AutoRegressiveObservations, \
@@ -105,6 +106,7 @@ def HMM(K, D, M=0,
         categorical=CategoricalObservations,
         poisson=PoissonObservations,
         vonmises=VonMisesObservations,
+        clusterless=MarkedPointProcessObservations,
         ar=RecurrentAutoRegressiveObservations if is_recurrent else AutoRegressiveObservations,
         autoregressive=RecurrentAutoRegressiveObservations if is_recurrent else AutoRegressiveObservations,
         independent_ar=IndependentAutoRegressiveObservations,
