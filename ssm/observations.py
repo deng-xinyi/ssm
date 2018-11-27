@@ -920,6 +920,7 @@ class RecurrentRobustAutoRegressiveObservations(
     RobustAutoRegressiveObservations):
     pass
 
+
 #for clusterless encoder
 """
 TO-DO: joint mark intensity
@@ -931,6 +932,7 @@ class MarkedPointProcessObservations(_Observations):
         self.logit_ps = npr.randn(K, D1) # ground intensity by tetrode, e.g. location
         self.mus = npr.randn(K, D1, D2) # mark mean
         self.inv_sigmas = -2 + npr.randn(K, D1, D2) # mark log variance
+        assert np.all(np.isfinite(self.inv_sigmas))
         
     @property
     def params(self):
@@ -951,10 +953,12 @@ class MarkedPointProcessObservations(_Observations):
         from sklearn.cluster import KMeans
         spikes = np.concatenate(datas)[:, :, 0]
         km = KMeans(self.K).fit(spikes)
-        self.log_lambdas = np.log(km.cluster_centers_ + 1e-3)     
+        ps = np.clip(km.cluster_centers_, 1e-3, 1-1e-3)
+        self.logit_ps = logit(ps)
         
     def log_likelihoods(self, datas, input, mask, tag):
         # datas in T by D by N+1        
+        assert np.all(np.isfinite(self.inv_sigmas))
         mus, sigmas = self.mus, np.exp(self.inv_sigmas) # K by D1 by D2
         
         spikes = datas[:, :, 0] # spike train, T by D1
@@ -966,7 +970,6 @@ class MarkedPointProcessObservations(_Observations):
         # Bernoulli,
         ### no spike, lambdas
         ### yes spikes, kernel
-        
         ps = logistic(self.logit_ps)
         #mask = np.ones_like(spikes, dtype=bool) if mask is None else mask
         lls = spikes[:, None, :] * np.log(ps) + (1 - spikes[:, None, :]) * np.log(1 - ps)
@@ -991,35 +994,41 @@ class MarkedPointProcessObservations(_Observations):
         return np.concatenate((spikes_x[:, None]*1, spikes_x[:, None] * marks_x), axis = 1)
 
     def m_step(self, expectations, datas, inputs, masks, tags, **kwargs):
-        ###
-        # expectations is now a tuple of length 3
-        # change to `weights = np.concatenate([Ez for Ez, _, _ in expectations])`
-        # (the entries are `E[z_t = k], E[z_t = k, z_{t+1}=k'], log p(x_{1:T})`)
-        ###
+        """
+        expectations is now a tuple of length 3
+        change to 'weights = np.concatenate([Ez for Ez, _, _ in expectations])'
+        (the entries are 'E[z_t = k], E[z_t = k, z_{t+1}=k'], log p(x_{1:T})')
+        """
         
         ### a combination of Bernoulli and Gaussian                
-        spikes_x = np.concatenate(datas)[:, :, 0]     
+        spikes_x = np.concatenate(datas)[:, :, 0]
         marks_x = np.concatenate(datas)[:, :, 1:]
         weights = np.concatenate([Ez for Ez, _, _ in expectations])
-        
+        ## weights * spikes
         assert np.all(np.isfinite(weights))
         
         for k in range(self.K):
+            assert weights[:, k].sum() > 0
             ### Bernoulli
             ps = np.clip(np.average(spikes_x, axis=0, weights=weights[:, k]), 1e-3, 1-1e-3)
             self.logit_ps[k] = logit(ps)
             ### Gaussian
-            self.mus[k] = np.average(marks_x, axis=0, weights=weights[:, k])
-            sqerr = (marks_x - self.mus[k])**2
-            self.inv_sigmas[k] = np.log(np.average(sqerr, weights=weights[:, k], axis=0))
+            ### only when there are spikes
+            for j in range(self.D[0]): # per tetrode
+                assert np.sum(weights[:, k] * spikes_x[:, j]) > 0
+                self.mus[k, j] = np.average(marks_x[:, j, :], axis=0, weights=weights[:, k] * spikes_x[:, j])            
+                sqerr = (marks_x[:, j, :] - self.mus[k, j])**2
+                self.inv_sigmas[k, j] = np.log(1e-8 + np.average(sqerr, weights=weights[:, k] * spikes_x[:, j], axis=0))
+            
+            assert np.all(np.isfinite(self.inv_sigmas[k]))
             
     def smooth(self, expectations, data, input, tag):
         """
         Compute the mean observation under the posterior distribution
         of latent discrete states.
         """
-        return expectations.dot(np.exp(self.log_lambdas))
-
+        ps = 1 / (1 + np.exp(self.logit_ps))
+        return expectations.dot(ps)
     
 class VonMisesObservations(_Observations):
     def __init__(self, K, D, M=0):
