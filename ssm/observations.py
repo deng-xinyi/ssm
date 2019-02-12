@@ -926,24 +926,27 @@ class RecurrentRobustAutoRegressiveObservations(
 TO-DO: joint mark intensity
 """
 class MarkedPointProcessObservations(_Observations):
-    def __init__(self, K, D, M=0):
+    def __init__(self, K, D, Q=3, M=0):
         super(MarkedPointProcessObservations, self).__init__(K, D, M=M)
-        D1, D2 = D[0], D[1]-1
-        self.logit_ps = npr.randn(K, D1) # ground intensity by tetrode, e.g. location
-        self.mus = npr.randn(K, D1, D2) # mark mean
-        self.inv_sigmas = -2 + npr.randn(K, D1, D2) # mark log variance
+        self.Q = Q # number of Gaussians for encoding
+        self.pi = np.ones((K, D[0], Q)) / Q
+        self.log_lambdas = npr.randn(K, D[0]) # ground intensity by tetrode, e.g. location
+        
+        ### Mixture of Gaussian, hyperparameter Q=3 is number of Gaussians
+        self.mus = npr.randn(K, D[0], D[2]-1, Q) # mark MoG mean
+        self.inv_sigmas = -2 + npr.randn(K, D[0], D[2]-1, Q) # mark log variance
         assert np.all(np.isfinite(self.inv_sigmas))
         
     @property
     def params(self):
-        return self.logit_ps, self.mus, self.inv_sigmas
+        return self.log_lambdas, self.mus, self.inv_sigmas
     
     @params.setter
     def params(self, value):
-        self.logit_ps, self.mus, self.inv_sigmas = value
+        self.log_lambdas, self.mus, self.inv_sigmas = value
         
     def permute(self, perm):
-        self.logit_ps = self.logit_ps[perm]
+        self.log_lambdas = self.log_lambdas[perm]
         self.mus = self.mus[perm]
         self.inv_sigmas = self.inv_sigmas[perm]
         
@@ -951,75 +954,95 @@ class MarkedPointProcessObservations(_Observations):
     def initialize(self, datas, inputs=None, masks=None, tags=None):
         # Initialize with KMeans
         from sklearn.cluster import KMeans
-        spikes = np.concatenate(datas)[:, :, 0]
+        spikes_n = datas[0][:, :, :, 0]
+        spikes = np.sum(spikes_n, axis=2)
         km = KMeans(self.K).fit(spikes)
-        ps = np.clip(km.cluster_centers_, 1e-3, 1-1e-3)
-        self.logit_ps = logit(ps)
+        self.log_lambdas = np.log(km.cluster_centers_ + 1e-3)
         
-    def log_likelihoods(self, datas, input, mask, tag):
-        # datas in T by D by N+1        
+    def log_likelihoods(self, datas, input, mask, tag):    
         assert np.all(np.isfinite(self.inv_sigmas))
-        mus, sigmas = self.mus, np.exp(self.inv_sigmas) # K by D1 by D2
+        ## hyperparameter: number of mixtures, Q = 3
+        mus, sigmas, pi = self.mus, np.exp(self.inv_sigmas), self.pi # K by D0 by D1 by Q
         
-        spikes = datas[:, :, 0] # spike train, T by D1
-        marks = datas[:, :, 1:] # marks, T by D1 by D2
+        spikes_n = datas[:, :, :, 0]
+        spikes = np.sum(spikes_n, axis=2) # spike train, T by D0 by D1
+        marks = datas[:, :, :, 1:] # marks, T by D0 (tet) by D1 (max spks) by D2-1 (mark dim)
         
-        log_normpdf = -0.5 * (marks[:, None, :, :] - mus)**2 / sigmas - 0.5 * np.log(2 * np.pi * sigmas) # T by K by D by N
-        log_normpdf = np.sum(log_normpdf, axis=3) # T by K by D1
+        ### MoG
+        log_normpdf = -0.5 * (marks[:, None, :, :, :, None] - mus[:, :, None, :, :])**2 / sigmas[:, :, None, :, :] - 0.5 * np.log(2 * np.pi * sigmas[:, :, None, :, :]) # T by K by D1 by D4 by D4 by Q
+        log_normpdf = log_normpdf * pi[None, :, :, None, None, :]
+        log_normpdf = np.sum(log_normpdf, axis=(4,5)) # T by K by D0 (tet)
               
-        # Bernoulli,
+        # Poisson
         ### no spike, lambdas
         ### yes spikes, kernel
-        ps = logistic(self.logit_ps)
+        lambdas = np.exp(self.log_lambdas)
         #mask = np.ones_like(spikes, dtype=bool) if mask is None else mask
-        lls = spikes[:, None, :] * np.log(ps) + (1 - spikes[:, None, :]) * np.log(1 - ps)
-        ### T by K by D1
-        lls += spikes[:, None, :] * log_normpdf # if spike
+        lls = -gammaln(spikes[:, None, :] + 1) - lambdas + spikes[:, None, :] * np.log(lambdas)
+        ### T by K by D1 
+        lls += np.sum(spikes_n[:, None, :] * log_normpdf, axis=3) # if spike along spike count dim
         ### we are adding mark probability if spike
         #return np.sum(lls * mask[:, None, :], axis=2) # T by K
         return np.sum(lls, axis=2) # T by K
         ### summing out tetrode dimension only if mask = 1
 
     def sample_x(self, z, xhist, input=None, tag=None, with_noise=True):
-        ## no spike, sample from Bernoulli
-        ## yes spike, sample from Gaussian
-
-        ps = 1 / (1 + np.exp(self.logit_ps))
-        D1, D2, mus = self.D[0], self.D[1]-1, self.mus
-        sigmas = np.exp(self.inv_sigmas) if with_noise else np.zeros((self.K, D1))        
+        ## counts, sample from Poisson
+        lambdas = np.exp(self.log_lambdas)
+        ## marks, sample from mixture of Gaussians
+        mus = self.mus
+        sigmas = np.exp(self.inv_sigmas) if with_noise else np.zeros((self.K, self.D[0]))    
         
-        spikes_x =  npr.rand(D1) < ps[z]
-        marks_x = mus[z] + np.sqrt(sigmas[z]) * npr.randn(D1, D2)
+        spikes_n = npr.poisson(lambdas[z])
+        Q_x = npr.randint(self.Q)
+        marks_x = mus[z, :, None, :, :] + np.sqrt(sigmas[z, :, None, :, :]) * npr.randn(self.D[0], self.D[1], self.D[2]-1, self.Q)
+        marks_x = marks_x[:, :, :, Q_x]
         
-        return np.concatenate((spikes_x[:, None]*1, spikes_x[:, None] * marks_x), axis = 1)
-
+        spikes_x = np.ones([self.D[0], self.D[1], 1])
+        
+        for d in range(self.D[0]):
+            spikes_x[d, spikes_n[d]:, :] = 0
+            marks_x[d, spikes_n[d]:, :] = 0
+        
+        return np.concatenate((spikes_x, marks_x), axis=2)
+    
     def m_step(self, expectations, datas, inputs, masks, tags, **kwargs):
         """
         expectations is now a tuple of length 3
-        change to 'weights = np.concatenate([Ez for Ez, _, _ in expectations])'
-        (the entries are 'E[z_t = k], E[z_t = k, z_{t+1}=k'], log p(x_{1:T})')
+        change to "weights = np.concatenate([Ez for Ez, _, _ in expectations])"
+        the entries are E[z_t = k], E[z_t = k, z_{t+1}=k'], log p(x_{1:T})
         """
         
-        ### a combination of Bernoulli and Gaussian                
-        spikes_x = np.concatenate(datas)[:, :, 0]
-        marks_x = np.concatenate(datas)[:, :, 1:]
+        ### a combination of Poisson and mixture of Gaussians 
+        spikes_n = datas[0][:, :, :, 0]            
+        spikes = np.sum(spikes_n, axis=2) # spike train, T by D1 by D2
+        marks = datas[0][:, :, :, 1:] # marks, T by D1 by D3 by D4
         weights = np.concatenate([Ez for Ez, _, _ in expectations])
         ## weights * spikes
         assert np.all(np.isfinite(weights))
         
-        for k in range(self.K):
+        for k in range(self.K): # per state
             assert weights[:, k].sum() > 0
-            ### Bernoulli
-            ps = np.clip(np.average(spikes_x, axis=0, weights=weights[:, k]), 1e-3, 1-1e-3)
-            self.logit_ps[k] = logit(ps)
-            ### Gaussian
+            ### Poisson
+            self.log_lambdas[k] = np.log(np.average(spikes, axis=0, weights=weights[:, k]) + 1e-8)
+
+            ### mixture of Gaussians
             ### only when there are spikes
             for j in range(self.D[0]): # per tetrode
-                assert np.sum(weights[:, k] * spikes_x[:, j]) > 0
-                self.mus[k, j] = np.average(marks_x[:, j, :], axis=0, weights=weights[:, k] * spikes_x[:, j])            
-                sqerr = (marks_x[:, j, :] - self.mus[k, j])**2
-                self.inv_sigmas[k, j] = np.log(1e-8 + np.average(sqerr, weights=weights[:, k] * spikes_x[:, j], axis=0))
-            
+#                assert np.sum(weights[:, k] * spikes[:, j]) > 0
+#            
+#                self.mus[k, j] = np.average(marks[:, j, :], axis=0, weights=weights[:, k] * spikes[:, j])            
+#                sqerr = (marks[:, j, :] - self.mus[k, j])**2
+#                self.inv_sigmas[k, j] = np.log(1e-8 + np.average(sqerr, weights=weights[:, k] * spikes[:, j], axis=0))
+                
+                #### or use predefined functions
+                marks_n = np.empty((0, self.D[2]-1))  # N_spk by D3-1: number of spikes by dim of mark
+                for i in range(spikes.shape[0]):
+                    marks_n = np.concatenate([marks_n, marks[i, j, 0:np.int(spikes[i,j]), :]])
+                assert marks_n.shape[0] == np.int(np.sum(spikes[:, j]))
+                
+                self.mus[k, j, :], self.inv_sigmas[k, j, :], self.pi[k, j, :] = mixture_of_gaussian_em(marks_n, self.Q, init_params=None, weights=None, num_iters=100)
+                
             assert np.all(np.isfinite(self.inv_sigmas[k]))
             
     def smooth(self, expectations, data, input, tag):
@@ -1027,8 +1050,7 @@ class MarkedPointProcessObservations(_Observations):
         Compute the mean observation under the posterior distribution
         of latent discrete states.
         """
-        ps = 1 / (1 + np.exp(self.logit_ps))
-        return expectations.dot(ps)
+        return expectations.dot(np.exp(self.log_lambdas))
     
 class VonMisesObservations(_Observations):
     def __init__(self, K, D, M=0):
