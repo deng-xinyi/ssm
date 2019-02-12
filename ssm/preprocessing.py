@@ -74,3 +74,61 @@ def standardize(data, mask):
     assert np.all(np.isfinite(y))
     return y
 
+def mixture_of_gaussian_em(data, Q, init_params=None, weights=None, num_iters=100):
+    """
+    Use expectation-maximization (EM) to compute the maximum likelihood
+    estimate of the parameters of a Gaussian mixture model.  The datapoints
+    x_i are assumed to come from the following model:
+        
+        z_i ~ Cate(pi) 
+        x_i | z_i ~ N(mu_{z_i}, Sigma_{z_i})
+        
+    the parameters are {pi_q, mu_q, Sigma_q} for q = 1...Q 
+    
+    Assume:
+        - data x_i are vectors in R^M
+        - covariance is diagonal S_q = diag([S_{q1}, .., S_{qm}])
+    """
+    N, M = data.shape  ### concatenate all marks; N = # of spikes, M = # of mark dim
+    
+    if init_params is not None:
+        pi, mus, inv_sigmas = init_params
+        assert pi.shape == (Q,)
+        assert np.all(pi >= 0) and np.allclose(pi.sum(), 1)
+        assert mus.shape == (M, Q)
+        assert inv_sigmas.shape == (M, Q)
+    else:
+        pi = np.ones(Q) / Q
+        mus = npr.randn(M,Q)
+        inv_sigmas = -2 + npr.randn(M,Q)
+        
+    if weights is not None:
+        assert weights.shape == (N,) and np.all(weights >= 0)
+    else:
+        weights = np.ones(N)
+        
+    for itr in range(num_iters):
+        ## E-step:
+        ## output: number of spikes by number of mixture
+        ## attribute spikes to each Q element
+        sigmas = np.exp(inv_sigmas)
+        responsibilities = np.zeros((N, Q))
+        responsibilities += np.log(pi)
+        for q in range(Q):
+            responsibilities[:, q] = np.sum(-0.5 * (data - mus[None, :, q])**2 / sigmas[None, :, q] - 0.5 * np.log(2 * np.pi * sigmas[None, :, q]), axis=1) 
+            # norm.logpdf(...)
+            
+        responsibilities -= logsumexp(responsibilities, axis=1, keepdims=True)
+        responsibilities = np.exp(responsibilities)
+        
+        ## M-step:
+        ## take in responsibilities (output of e-step)
+        ## compute MLE of Gaussian parameters
+        ## mean/std is weighted means/std of mix
+        for q in range(Q):
+            pi[q] = np.average(responsibilities[:, q])
+            mus[:, q] = np.average(data, weights=responsibilities[:, q] * weights, axis=0)
+            sqerr = (data - mus[None, :, q])**2
+            inv_sigmas[:, q] = np.log(1e-8 + np.average(sqerr, weights=responsibilities[:, q] * weights, axis=0))
+            
+    return mus, inv_sigmas, pi
