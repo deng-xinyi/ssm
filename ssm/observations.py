@@ -926,7 +926,7 @@ class RecurrentRobustAutoRegressiveObservations(
 TO-DO: joint mark intensity
 """
 class MarkedPointProcessObservations(_Observations):
-    def __init__(self, K, D, Q=3, M=0):
+    def __init__(self, K, D, Q=2, M=0):
         super(MarkedPointProcessObservations, self).__init__(K, D, M=M)
         self.Q = Q # number of Gaussians for encoding
         self.pi = np.ones((K, D[0], Q)) / Q
@@ -939,16 +939,17 @@ class MarkedPointProcessObservations(_Observations):
         
     @property
     def params(self):
-        return self.log_lambdas, self.mus, self.inv_sigmas
+        return self.log_lambdas, self.mus, self.inv_sigmas, self.pi
     
     @params.setter
     def params(self, value):
-        self.log_lambdas, self.mus, self.inv_sigmas = value
+        self.log_lambdas, self.mus, self.inv_sigmas, self.pi = value
         
     def permute(self, perm):
         self.log_lambdas = self.log_lambdas[perm]
         self.mus = self.mus[perm]
         self.inv_sigmas = self.inv_sigmas[perm]
+        self.pi = self.pi[perm]
         
     @ensure_args_are_lists
     def initialize(self, datas, inputs=None, masks=None, tags=None):
@@ -964,14 +965,15 @@ class MarkedPointProcessObservations(_Observations):
         ## hyperparameter: number of mixtures, Q = 3
         mus, sigmas, pi = self.mus, np.exp(self.inv_sigmas), self.pi # K by D0 by D1 by Q
         
-        spikes_n = datas[:, :, :, 0]
-        spikes = np.sum(spikes_n, axis=2) # spike train, T by D0 by D1
+        spikes_n = datas[:, :, :, 0] # T by D0 by D1 (max spike) by 1 (binary spike)
+        spikes = np.sum(spikes_n, axis=2) # spike train, T by D0
         marks = datas[:, :, :, 1:] # marks, T by D0 (tet) by D1 (max spks) by D2-1 (mark dim)
         
         ### MoG
         log_normpdf = -0.5 * (marks[:, None, :, :, :, None] - mus[:, :, None, :, :])**2 / sigmas[:, :, None, :, :] - 0.5 * np.log(2 * np.pi * sigmas[:, :, None, :, :]) # T by K by D1 by D4 by D4 by Q
-        log_normpdf = log_normpdf * pi[None, :, :, None, None, :]
-        log_normpdf = np.sum(log_normpdf, axis=(4,5)) # T by K by D0 (tet)
+        log_normpdf = log_normpdf + np.log(pi[:, :, None, None, :])
+        log_normpdf = logsumexp(log_normpdf, axis=5) # T by K by D0 (tet) by D1 (max spike) by D2-1 (mark dim)
+        log_normpdf = np.sum(log_normpdf, axis=4) # T by K by D0 (tet) by D1 (max spike)
               
         # Poisson
         ### no spike, lambdas
@@ -979,8 +981,8 @@ class MarkedPointProcessObservations(_Observations):
         lambdas = np.exp(self.log_lambdas)
         #mask = np.ones_like(spikes, dtype=bool) if mask is None else mask
         lls = -gammaln(spikes[:, None, :] + 1) - lambdas + spikes[:, None, :] * np.log(lambdas)
-        ### T by K by D1 
-        lls += np.sum(spikes_n[:, None, :] * log_normpdf, axis=3) # if spike along spike count dim
+        # MoG
+        lls += np.sum(spikes_n[:, None, :, :] * log_normpdf, axis=3) # if spike along spike count dim
         ### we are adding mark probability if spike
         #return np.sum(lls * mask[:, None, :], axis=2) # T by K
         return np.sum(lls, axis=2) # T by K
@@ -995,8 +997,7 @@ class MarkedPointProcessObservations(_Observations):
         
         spikes_n = npr.poisson(lambdas[z])
         Q_x = npr.randint(self.Q)
-        marks_x = mus[z, :, None, :, :] + np.sqrt(sigmas[z, :, None, :, :]) * npr.randn(self.D[0], self.D[1], self.D[2]-1, self.Q)
-        marks_x = marks_x[:, :, :, Q_x]
+        marks_x = mus[z, :, None, :, Q_x] + np.sqrt(sigmas[z, :, None, :, Q_x]) * npr.randn(self.D[0], self.D[1], self.D[2]-1)
         
         spikes_x = np.ones([self.D[0], self.D[1], 1])
         
@@ -1015,9 +1016,9 @@ class MarkedPointProcessObservations(_Observations):
         
         ### a combination of Poisson and mixture of Gaussians 
         spikes_n = datas[0][:, :, :, 0]            
-        spikes = np.sum(spikes_n, axis=2) # spike train, T by D1 by D2
-        marks = datas[0][:, :, :, 1:] # marks, T by D1 by D3 by D4
-        weights = np.concatenate([Ez for Ez, _, _ in expectations])
+        spikes = np.sum(spikes_n, axis=2) # spike train, T by D0
+        marks = datas[0][:, :, :, 1:] # marks, T by D0 by D1 by D2-1
+        weights = np.concatenate([Ez for Ez, _, _ in expectations]) # T by K
         ## weights * spikes
         assert np.all(np.isfinite(weights))
         
@@ -1030,19 +1031,24 @@ class MarkedPointProcessObservations(_Observations):
             ### only when there are spikes
             for j in range(self.D[0]): # per tetrode
 #                assert np.sum(weights[:, k] * spikes[:, j]) > 0
-#            
-#                self.mus[k, j] = np.average(marks[:, j, :], axis=0, weights=weights[:, k] * spikes[:, j])            
-#                sqerr = (marks[:, j, :] - self.mus[k, j])**2
-#                self.inv_sigmas[k, j] = np.log(1e-8 + np.average(sqerr, weights=weights[:, k] * spikes[:, j], axis=0))
                 
-                #### or use predefined functions
-                marks_n = np.empty((0, self.D[2]-1))  # N_spk by D3-1: number of spikes by dim of mark
-                for i in range(spikes.shape[0]):
-                    marks_n = np.concatenate([marks_n, marks[i, j, 0:np.int(spikes[i,j]), :]])
-                assert marks_n.shape[0] == np.int(np.sum(spikes[:, j]))
+                 #### with loop
+#                marks_n = np.empty((0, self.D[2]-1))  # N_spk by D2-1: number of spikes by dim of mark
+#                for i in range(spikes.shape[0]):
+#                    marks_n = np.concatenate([marks_n, marks[i, j, 0:np.int(spikes[i,j]), :]])
+#                assert marks_n.shape[0] == np.int(np.sum(spikes[:, j]))
+
+                #### without loop
+                spike_mask = np.arange(self.D[1]) < spikes[:, j][:, None] # T x max spike
+                marks_n = marks[:, j, :][spike_mask]
                 
-                self.mus[k, j, :], self.inv_sigmas[k, j, :], self.pi[k, j, :] = mixture_of_gaussian_em(marks_n, self.Q, init_params=None, weights=None, num_iters=100)
+                weights_per_mark = np.repeat(weights[:, k], spikes[:, j].astype(int))
+                assert weights_per_mark.shape == (np.int(np.sum(spikes[:, j])),)
                 
+                self.mus[k, j, :], self.inv_sigmas[k, j, :], self.pi[k, j, :] = \
+                    mixture_of_gaussian_em(marks_n, self.Q, init_params=None, 
+                                           weights=weights_per_mark, num_iters=100)
+            
             assert np.all(np.isfinite(self.inv_sigmas[k]))
             
     def smooth(self, expectations, data, input, tag):
