@@ -958,14 +958,12 @@ class MarkedPointProcessObservations(_Observations):
         for cell_i in range(self.N):
             self.log_lambdas[:, :, cell_i] = np.log(km.cluster_centers_ + 1e-3)       
         
-#        ### initialize mark space
-#        for tet_i in range(self.D[0]):
-#            spike_mask = np.arange(self.D[1]) < spikes[:, tet_i][:, None] # T by max-spk
-#            marks_n = marks[:, tet_i, :][spike_mask]            
-#            km = KMeans(self.N).fit(marks_n)
-#            self.mus[tet_i] = np.log(km.cluster_centers_ + 1e-3)
-            
-#        assert ~np.isnan(self.mus).any()
+        ### initialize mark space
+        for tet_i in range(self.D[0]):
+            spike_mask = np.arange(self.D[1]) < spikes[:, tet_i][:, None] # T by max-spk
+            marks_n = marks[:, tet_i, :][spike_mask]            
+            km = KMeans(self.N).fit(marks_n)
+            self.mus[tet_i] = km.cluster_centers_
             
     def log_likelihoods(self, datas, input, mask, tag):    
         assert np.all(np.isfinite(self.inv_sigmas))
