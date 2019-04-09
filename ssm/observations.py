@@ -951,7 +951,7 @@ class MarkedPointProcessObservations(_Observations):
         from sklearn.cluster import KMeans
         spikes_n = datas[0][:, :, :, 0]
         spikes = np.sum(spikes_n, axis=2)
-#        marks = datas[0][:, :, :, 1:]
+        marks = datas[0][:, :, :, 1:]
         
         ### initialize ground intensity
         km = KMeans(self.K).fit(spikes)
@@ -964,6 +964,9 @@ class MarkedPointProcessObservations(_Observations):
             marks_n = marks[:, tet_i, :][spike_mask]            
             km = KMeans(self.N).fit(marks_n)
             self.mus[tet_i] = km.cluster_centers_
+            sigmas = np.array([np.var(marks_n[km.labels_ == n], axis=0)
+                           for n in range(self.N)])
+            self.inv_sigmas[tet_i] = np.log(sigmas + 1e-8)            
             
     def log_likelihoods(self, datas, input, mask, tag):    
         assert np.all(np.isfinite(self.inv_sigmas))
