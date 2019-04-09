@@ -922,9 +922,6 @@ class RecurrentRobustAutoRegressiveObservations(
 
 
 #for clusterless encoder
-"""
-TO-DO: joint mark intensity
-"""
 class MarkedPointProcessObservations(_Observations):
     def __init__(self, K, D, N=3, M=0):
         super(MarkedPointProcessObservations, self).__init__(K, D, M=M)
@@ -932,8 +929,8 @@ class MarkedPointProcessObservations(_Observations):
         self.log_lambdas = npr.randn(K, D[0], N) # ground intensity of each latent cell
         # state by tetrode by cells
         
-        ### single multivariate Gaussian per cell
-        self.mus = npr.randn(D[0], self.N, D[2]-1) # tetrode by cells by mark dim
+        ### single Gaussian
+        self.mus = npr.randn(D[0], self.N, D[2]-1) # tet by cell by mark-dim
         self.inv_sigmas = -2 + npr.randn(D[0], self.N, D[2]-1) # mark log variance
         assert np.all(np.isfinite(self.inv_sigmas))
         
@@ -947,8 +944,6 @@ class MarkedPointProcessObservations(_Observations):
         
     def permute(self, perm):
         self.log_lambdas = self.log_lambdas[perm]
-        self.mus = self.mus[perm]
-        self.inv_sigmas = self.inv_sigmas[perm]
         
     @ensure_args_are_lists
     def initialize(self, datas, inputs=None, masks=None, tags=None):
@@ -956,37 +951,54 @@ class MarkedPointProcessObservations(_Observations):
         from sklearn.cluster import KMeans
         spikes_n = datas[0][:, :, :, 0]
         spikes = np.sum(spikes_n, axis=2)
-        km = KMeans(self.K).fit(spikes)
-        self.log_lambdas = np.log(km.cluster_centers_ + 1e-3)
+#        marks = datas[0][:, :, :, 1:]
         
+        ### initialize ground intensity
+        km = KMeans(self.K).fit(spikes)
+        for cell_i in range(self.N):
+            self.log_lambdas[:, :, cell_i] = np.log(km.cluster_centers_ + 1e-3)       
+        
+#        ### initialize mark space
+#        for tet_i in range(self.D[0]):
+#            spike_mask = np.arange(self.D[1]) < spikes[:, tet_i][:, None] # T by max-spk
+#            marks_n = marks[:, tet_i, :][spike_mask]            
+#            km = KMeans(self.N).fit(marks_n)
+#            self.mus[tet_i] = np.log(km.cluster_centers_ + 1e-3)
+            
+#        assert ~np.isnan(self.mus).any()
+            
     def log_likelihoods(self, datas, input, mask, tag):    
         assert np.all(np.isfinite(self.inv_sigmas))
         ##
-        mus, sigmas = self.mus, np.exp(self.inv_sigmas) # D0 by Q by D2-1
+        mus, sigmas = self.mus, np.exp(self.inv_sigmas) # tet by cell by mark-dim
         
         spikes_n = datas[:, :, :, 0] # T by tet by max-spk by 1 (binary spike)
-        spikes = np.sum(spikes_n, axis=2) # spike train, T by tetrode
-        marks = datas[:, :, :, 1:] # marks, T by D0 (tet) by D1 (max spks) by D2-1 (mark dim)
+        spikes = np.sum(spikes_n, axis=2) # spike train, T by tet
+        marks = datas[:, :, :, 1:] # marks, T by tet by max-spks by mark-dim
         
         ### Gaussian for mark (not state dependent)
-        ### add only cell dimension
-        log_normpdf = -0.5 * (marks[:, :, None, :, :] - mus[:, :, None, :])**2 / sigmas[:, :, None, :] - 0.5 * np.log(2 * np.pi * sigmas[:, :, None, :])
-        log_normpdf = np.sum(log_normpdf, axis=4) 
+        assert mus.shape[0] == self.D[0]
+        log_normpdf_cell_mark = -0.5 * (marks[:, :, None, :, :] - mus[:, :, None, :])**2 / sigmas[:, :, None, :] - 0.5 * np.log(2 * np.pi * sigmas[:, :, None, :])
+        log_normpdf_cell = np.sum(log_normpdf_cell_mark, axis=4) 
         # T by tet by cell by max-spk
         
-        ### Poisson for spiking
+        ### Poisson for spiking (state dependent)
         lambdas = np.exp(self.log_lambdas) # state by tet by cell
-        ### broadcast spikes to both state and cell dimensions
-        lls = -gammaln(spikes[:, None, :, None] + 1) - lambdas + spikes[:, None, :, None] * np.log(lambdas)
+        lls_cell = -gammaln(spikes[:, None, :, None] + 1) - lambdas + spikes[:, None, :, None] * np.log(lambdas)
         # T by state by tet by cell by max-spk
         
         #### combine both, still have cell dimension
-        ### if spike along max-spk dim
-        lls += np.sum(spikes_n[:, None, :, None, :] * log_normpdf[:, None, :, :, :], axis=4) 
-        # T by state by tet by cell
+        ### if spike along max-spk, add mark probability
+        lls_cell += np.sum(spikes_n[:, None, :, None, :] * log_normpdf_cell[:, None, :, :, :], axis=4) 
+        # T by state by tet by cell       
 
-        #### finally, sum up lls weighted by cell
-        return np.sum(lls * lambdas, axis=(2,3)) # T by K
+        #### finally, sum up lls with weights for each cell
+        pi_sum = np.sum(lambdas, axis=2)
+        pi_cell = lambdas / pi_sum[:, :, None] # state by tet by cell
+        lls_cell += lls_cell + np.log(pi_cell[None, :, :, :])
+        
+        lls = logsumexp(lls_cell, axis=3) # T by state by tet by cell
+        return np.sum(lls, axis=2) # T by K
 
     def sample_x(self, z, xhist, input=None, tag=None, with_noise=True):
         ## counts, sample from Poisson
@@ -1021,47 +1033,41 @@ class MarkedPointProcessObservations(_Observations):
         the entries are E[z_t = k], E[z_t = k, z_{t+1}=k'], log p(x_{1:T})
         """
         spikes_n = datas[0][:, :, :, 0]            
-        spikes = np.sum(spikes_n, axis=2) # spike train, T by D0
-        marks = datas[0][:, :, :, 1:] # marks, T by D0 by D1 by D2-1
+        spikes = np.sum(spikes_n, axis=2) # spike train, T by tet
+        marks = datas[0][:, :, :, 1:] # marks, T by tet by max-spk by mark dim
         
         ### weights: prob of being in state k
         weights = np.concatenate([Ez for Ez, _, _ in expectations]) # T by K
         ## weights * spikes
         assert np.all(np.isfinite(weights))
         
-        for k in range(self.K): # per state
-            assert weights[:, k].sum() > 0
-            ### Poisson
-            self.log_lambdas[k] = np.log(np.average(spikes, axis=0, weights=weights[:, k]) + 1e-8)
+        log_lambdas_state = np.zeros((self.K, self.D[0])) # state by tet
 
-            ### Gaussian mark, not state dependent
-            ### only when there are spikes, update weights
-            for j in range(self.D[0]): # per tetrode
-                if np.sum(weights[:, k] * spikes[:, j]) > 0:
-                
-                    spike_mask = np.arange(self.D[1]) < spikes[:, j][:, None] # T by max-spk
-                    marks_n = marks[:, j, :][spike_mask]
+        ### Gaussian mark, not state dependent
+        for tet_i in range(self.D[0]): # per tetrode            
+            spike_mask = np.arange(self.D[1]) < spikes[:, tet_i][:, None] # T by max-spk
+            marks_n = marks[:, tet_i, :][spike_mask] # total spikes by mark-dim
+            
+            mus_cell, inv_sigmas_cell, pi_cell = \
+                mixture_of_gaussian_em(marks_n, self.N, init_params=None, 
+                                       weights=None, num_iters=100)
+            
+            self.mus[tet_i, :] = np.transpose(mus_cell)
+            self.inv_sigmas[tet_i, :] = np.transpose(inv_sigmas_cell)
+            
+            ### Poisson: ground intensity of all cells
+            for state_i in range(self.K): # per state
+                assert weights[:, state_i].sum() > 0
+                log_lambdas_state[state_i] = np.log(np.average(spikes, axis=0, weights=weights[:, state_i]) + 1e-8)
+                self.log_lambdas[state_i, tet_i, :] = log_lambdas_state[state_i, tet_i] * pi_cell
                     
-                    #### weight mask
-                    weights_per_mark = np.repeat(weights[:, k], spikes[:, j].astype(int))
-                    assert weights_per_mark.shape == (np.int(np.sum(spikes[:, j])),)
-                    
-                    """ 
-                    to-do!
-                    """
-                    
-#                    assert np.sum(weights_per_mark) > 0
-                    self.mus[j, :], self.inv_sigmas[j, :], self.pi[k, j, :] = \
-                        mixture_of_gaussian_em(marks_n, self.N, init_params=None, 
-                                               weights=weights_per_mark, num_iters=100)
-                        
     def smooth(self, expectations, data, input, tag):
         """
         Compute the mean observation under the posterior distribution
         of latent discrete states.
         """
         return expectations.dot(np.exp(self.log_lambdas))
-
+    
     
 class VonMisesObservations(_Observations):
     def __init__(self, K, D, M=0):
