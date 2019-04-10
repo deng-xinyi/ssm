@@ -19,14 +19,14 @@ class _Transitions(object):
     @property
     def params(self):
         raise NotImplementedError
-    
+
     @params.setter
     def params(self, value):
         raise NotImplementedError
 
     def initialize(self, datas, inputs, masks, tags):
         pass
-        
+
     def permute(self, perm):
         pass
 
@@ -36,12 +36,12 @@ class _Transitions(object):
     def log_transition_matrices(self, data, input, mask, tag):
         raise NotImplementedError
 
-    def m_step(self, expectations, datas, inputs, masks, tags, optimizer="adam", num_iters=10, **kwargs):
+    def m_step(self, expectations, datas, inputs, masks, tags, optimizer="adam", num_iters=100, **kwargs):
         """
         If M-step cannot be done in closed form for the transitions, default to SGD.
         """
         optimizer = dict(sgd=sgd, adam=adam, adam_with_convergence_check=adam_with_convergence_check)[optimizer]
-        
+
         # expected log joint
         def _expected_log_joint(expectations):
             elbo = self.log_prior()
@@ -63,7 +63,7 @@ class _Transitions(object):
 
 class StationaryTransitions(_Transitions):
     """
-    Standard Hidden Markov Model with fixed initial distribution and transition matrix. 
+    Standard Hidden Markov Model with fixed initial distribution and transition matrix.
     """
     def __init__(self, K, D, M=0):
         super(StationaryTransitions, self).__init__(K, D, M=M)
@@ -74,7 +74,7 @@ class StationaryTransitions(_Transitions):
     @property
     def params(self):
         return (self.log_Ps,)
-    
+
     @params.setter
     def params(self, value):
         self.log_Ps = value[0]
@@ -102,7 +102,7 @@ class StationaryTransitions(_Transitions):
 
 class StickyTransitions(StationaryTransitions):
     """
-    Upweight the self transition prior. 
+    Upweight the self transition prior.
 
     pi_k ~ Dir(alpha + kappa * e_k)
     """
@@ -114,7 +114,7 @@ class StickyTransitions(StationaryTransitions):
     def log_prior(self):
         K = self.K
         Ps = np.exp(self.log_Ps - logsumexp(self.log_Ps, axis=1, keepdims=True))
-        
+
         lp = 0
         for k in range(K):
             alpha = self.alpha * np.ones(K) + self.kappa * (np.arange(K) == k)
@@ -126,13 +126,13 @@ class StickyTransitions(StationaryTransitions):
         expected_joints += self.kappa * np.eye(self.K)
         P = expected_joints / expected_joints.sum(axis=1, keepdims=True)
         self.log_Ps = np.log(P)
-    
+
 
 class InputDrivenTransitions(_Transitions):
     """
-    Hidden Markov Model whose transition probabilities are 
+    Hidden Markov Model whose transition probabilities are
     determined by a generalized linear model applied to the
-    exogenous input. 
+    exogenous input.
     """
     def __init__(self, K, D, M):
         super(InputDrivenTransitions, self).__init__(K, D, M=M)
@@ -148,11 +148,11 @@ class InputDrivenTransitions(_Transitions):
     @property
     def params(self):
         return self.log_Ps, self.Ws
-    
+
     @params.setter
     def params(self, value):
         self.log_Ps, self.Ws = value
-        
+
     def permute(self, perm):
         """
         Permute the discrete latent states.
@@ -164,7 +164,7 @@ class InputDrivenTransitions(_Transitions):
         T = data.shape[0]
         assert input.shape[0] == T
         # Previous state effect
-        log_Ps = np.tile(self.log_Ps[None, :, :], (T-1, 1, 1)) 
+        log_Ps = np.tile(self.log_Ps[None, :, :], (T-1, 1, 1))
         # Input effect
         log_Ps = log_Ps + np.dot(input[1:], self.Ws.T)[:, None, :]
         return log_Ps - logsumexp(log_Ps, axis=2, keepdims=True)
@@ -188,7 +188,7 @@ class RecurrentTransitions(InputDrivenTransitions):
     @property
     def params(self):
         return super(RecurrentTransitions, self).params + (self.Rs,)
-    
+
     @params.setter
     def params(self, value):
         self.Rs = value[-1]
@@ -204,7 +204,7 @@ class RecurrentTransitions(InputDrivenTransitions):
     def log_transition_matrices(self, data, input, mask, tag):
         T, D = data.shape
         # Previous state effect
-        log_Ps = np.tile(self.log_Ps[None, :, :], (T-1, 1, 1)) 
+        log_Ps = np.tile(self.log_Ps[None, :, :], (T-1, 1, 1))
         # Input effect
         log_Ps = log_Ps + np.dot(input[1:], self.Ws.T)[:, None, :]
         # Past observations effect
@@ -214,11 +214,11 @@ class RecurrentTransitions(InputDrivenTransitions):
     def m_step(self, expectations, datas, inputs, masks, tags, **kwargs):
         """
         Fit a logistic regression for the transitions.
-        
-        Technically, this is a stochastic M-step since the states 
+
+        Technically, this is a stochastic M-step since the states
         are sampled from their posterior marginals.
         """
-        
+
         K, M, D = self.K, self.M, self.D
 
         zps, zns = [], []
@@ -227,7 +227,7 @@ class RecurrentTransitions(InputDrivenTransitions):
             zps.append(z[:-1])
             zns.append(z[1:])
 
-        X = np.vstack([np.hstack((one_hot(zp, K), input[1:], data[:-1])) 
+        X = np.vstack([np.hstack((one_hot(zp, K), input[1:], data[:-1]))
                        for zp, input, data in zip(zps, inputs, datas)])
         y = np.concatenate(zns)
 
@@ -235,7 +235,7 @@ class RecurrentTransitions(InputDrivenTransitions):
         used = np.unique(y)
         K_used = len(used)
         unused = np.setdiff1d(np.arange(K), used)
-        
+
         # Reset parameters before filling in
         self.log_Ps = np.zeros((K, K))
         self.Ws = np.zeros((K, M))
@@ -254,7 +254,7 @@ class RecurrentTransitions(InputDrivenTransitions):
         log_P = self._lr.coef_[:, :K]
         W = self._lr.coef_[:, K:K+M]
         R = self._lr.coef_[:, K+M:]
-            
+
         if K_used == 2:
             # lr thought there were only two classes
             self.log_Ps[:,used[1]] = self._lr.coef_[0, :K]
@@ -264,8 +264,8 @@ class RecurrentTransitions(InputDrivenTransitions):
             self.log_Ps[:, used] = log_P.T
             self.Ws[used] = W
             self.Rs[used] = R
-        
-        
+
+
 class RecurrentOnlyTransitions(_Transitions):
     """
     Only allow the past observations and inputs to influence the
@@ -288,7 +288,7 @@ class RecurrentOnlyTransitions(_Transitions):
     @property
     def params(self):
         return self.Ws, self.Rs, self.r
-    
+
     @params.setter
     def params(self, value):
         self.Ws, self.Rs, self.r = value
@@ -313,8 +313,8 @@ class RecurrentOnlyTransitions(_Transitions):
     def m_step(self, expectations, datas, inputs, masks, tags, optimizer="adam", num_iters=10, **kwargs):
         """
         Fit a logistic regression for the transitions.
-        
-        Technically, this is a stochastic M-step since the states 
+
+        Technically, this is a stochastic M-step since the states
         are sampled from their posterior marginals.
         """
         K, M, D = self.K, self.M, self.D
@@ -326,7 +326,7 @@ class RecurrentOnlyTransitions(_Transitions):
             zns.append(z[1:])
 
 
-        X = np.vstack([np.hstack((input[1:], data[:-1])) 
+        X = np.vstack([np.hstack((input[1:], data[:-1]))
                        for input, data in zip(inputs, datas)])
         y = np.concatenate(zns)
 
@@ -334,7 +334,7 @@ class RecurrentOnlyTransitions(_Transitions):
         used = np.unique(y)
         K_used = len(used)
         unused = np.setdiff1d(np.arange(K), used)
-        
+
         # Reset parameters before filling in
         self.Ws = np.zeros((K, M))
         self.Rs = np.zeros((K, D))
@@ -349,7 +349,7 @@ class RecurrentOnlyTransitions(_Transitions):
         self._lr.fit(X, y)
 
         # Extract the coefficients
-        assert self._lr.coef_.shape[0] == (K_used if K_used > 2 else 1)            
+        assert self._lr.coef_.shape[0] == (K_used if K_used > 2 else 1)
         if K_used == 2:
             # lr thought there were only two classes
             self.Ws[used[1]] = self._lr.coef_[0, :M]
@@ -360,7 +360,7 @@ class RecurrentOnlyTransitions(_Transitions):
 
         # Set the intercept
         self.r[used] = self._lr.intercept_
-        
+
 
 
 # Allow general nonlinear emission models with neural networks
@@ -387,7 +387,7 @@ class NeuralNetworkRecurrentTransitions(_Transitions):
     @property
     def params(self):
         return self.log_Ps, self.weights, self.biases
-        
+
     @params.setter
     def params(self, value):
         self.log_Ps, self.weights, self.biases = value
@@ -398,12 +398,12 @@ class NeuralNetworkRecurrentTransitions(_Transitions):
         self.biases[-1] = self.biases[-1][perm]
 
     def log_transition_matrices(self, data, input, mask, tag):
-        # Pass the data and inputs through the neural network 
+        # Pass the data and inputs through the neural network
         x = np.hstack((data[:-1], input[1:]))
         for W, b in zip(self.weights, self.biases):
             y = np.dot(x, W) + b
             x = self.nonlinearity(y)
-        
+
         # Add the baseline transition biases
         log_Ps = self.log_Ps[None, :, :] + y[:, None, :]
 
@@ -416,31 +416,38 @@ class DistanceDependentTransitions(_Transitions):
     In this model the transition probability depends on the distance
     between the latent locations associated with each discrete state.
 
-    Specifically, each state k has a location, \ell_k \in R^J, and 
-    the probability of transitioning is 
+    Specifically, each state k has a location, \ell_k \in R^J, and
+    the probability of transitioning is
 
-        Pr(z_t = k | z_{t-1} = k') 
+        Pr(z_t = k | z_{t-1} = k')
              \propto exp(-||\ell_k - \ell_{k'}||/L)   if k \neq k'
              \propto p_kk                             if k = k'
 
-    where L is a length scale that we treat as a hyperparameter. 
+    where L is a length scale that we treat as a hyperparameter.
     """
-    def __init__(self, K, D, M=0, L=1, J=2):
+    def __init__(self, K, D, M=0, L=1.0, J=2):
+        """
+        K: number of discrete states (integer)
+        D: data dimension (unused)
+        M: input dimension (unused)
+        L: length scale (positive real)
+        J: latent embedding dimension (integer)
+        """
         super(DistanceDependentTransitions, self).__init__(K, D, M=M)
         self.L = L
 
         # Initialize the parameters
         self.ell = npr.randn(K, J)
         self.log_p = np.zeros(K)
-        
+
     @property
     def params(self):
         return self.ell, self.log_p
-    
+
     @params.setter
     def params(self, value):
         self.ell, self.log_p = value
-    
+
     def permute(self, perm):
         """
         Permute the discrete latent states.
@@ -466,5 +473,5 @@ class DistanceDependentTransitions(_Transitions):
         T = data.shape[0]
         # Get the normalized transition matrix
         log_P = self.log_transition_matrix
-        # Tile the transition matrix for each time step 
+        # Tile the transition matrix for each time step
         return np.tile(log_P[None, :, :], (T-1, 1, 1))
