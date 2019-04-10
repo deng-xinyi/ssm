@@ -989,11 +989,10 @@ class MarkedPointProcessObservations(_Observations):
         lambdas = np.sum(np.exp(self.log_lambdas), axis=-1)
 
         # Get the log likelihood of indep. Poisson spike counts on each tetrode
-        lls = \
-            np.sum(-gammaln(spikes[:, None, :] + 1) \
-                   - lambdas \
-                   + spikes[:, None, :] * np.log(lambdas),
-                   axis=-1)
+        lls = np.sum(-gammaln(spikes[:, None, :] + 1) \
+                     - lambdas \
+                     + spikes[:, None, :] * np.log(lambdas),
+                     axis=-1)
 
         ### Mixture of Gaussian log density for marks (not state dependent)
         assert mus.shape[0] == self.D[0]
