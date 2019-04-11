@@ -959,7 +959,7 @@ class MarkedPointProcessObservations(_Observations):
         ### run K-means to find K discrete states (clusters) in total firing rates
         km = KMeans(self.K).fit(spikes)
         total_rates = np.minimum(km.cluster_centers_, 1e-3)
-        self.log_lambdas = np.tile(np.log(total_rates[:, :, None] / self.N), (1, 1, self.N))
+        self.log_lambdas = np.tile(np.log(1e-8 + total_rates[:, :, None] / self.N), (1, 1, self.N))
 
         ### initialize mark space
         for tet_i in range(self.D[0]):
