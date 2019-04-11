@@ -157,7 +157,6 @@ def mpp_bin(spmark, tbin_section, n_tet, n_mark, maxispk, timebin):
     marks_section = spmark_section[:, :, 1:]
     
     ### bin locomotion data; reshape spikes_section
-    timebin = 100 ## 100 msec time bin
     T_bin = int(dur_section / timebin)
     
     marks_section_reshape = marks_section.reshape(T_bin, timebin, D0, D2-1)
