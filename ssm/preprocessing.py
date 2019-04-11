@@ -132,3 +132,50 @@ def mixture_of_gaussian_em(data, Q, init_params=None, weights=None, num_iters=10
             inv_sigmas[:, q] = np.log(1e-8 + np.average(sqerr, weights=responsibilities[:, q] * weights, axis=0))
             
     return mus, inv_sigmas, pi
+
+def mpp_bin(spmark, tbin_section, n_tet, n_mark, maxispk, timebin):
+    """
+    re-bin marked point processes / spike train data with marks
+    
+    spmark: original bin size spike train with marks
+    tbin_section: take only a section of spmark
+    n_tet: number of tetrode
+    n_mark: number of mark dimension
+    maxispk: maximum number of spikes per bin after re-bin
+    timebin: new bin size
+    """
+    ### 
+    D0 = n_tet  # number of tetrodes
+    D1 = maxispk # max number of events (Poisson)
+    D2 = n_mark+1 # spike count dimension (per event 0 or 1) + four mark dimensions
+
+    ### an example section
+    dur_section = tbin_section.shape[0]
+    spmark_section = spmark[tbin_section]    
+    
+    spikes_section = spmark_section[:, :, 0]
+    marks_section = spmark_section[:, :, 1:]
+    
+    ### bin locomotion data; reshape spikes_section
+    timebin = 100 ## 100 msec time bin
+    T_bin = int(dur_section / timebin)
+    
+    marks_section_reshape = marks_section.reshape(T_bin, timebin, D0, D2-1)
+    spikes_section_reshape = spikes_section.reshape(T_bin, timebin, D0)
+    ### T (after binning) by tet by mark-dim
+    spikes_n_bin = np.sum(spikes_section_reshape, axis=1)
+    ### T (after binning) by tet
+    
+    spikes_bin = np.zeros((T_bin, D0, D1, 1))
+    marks_bin = np.zeros((T_bin, D0, D1, D2-1))
+    for tet_i in range(n_tet):
+        spike_mask = np.arange(D1) < spikes_n_bin[:, tet_i][:, None] # T by max-spk
+        spikes_bin[:, tet_i, :][spike_mask] = 1
+        
+        mark_mask = spikes_section_reshape[:, :, tet_i] > 0
+        marks_bin[:, tet_i, :][spike_mask] = marks_section_reshape[:, :, tet_i,:][mark_mask]
+        
+    
+    spmark_bin = np.concatenate((spikes_bin, marks_bin), axis=3)
+    
+    return spmark_bin
