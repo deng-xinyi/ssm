@@ -459,11 +459,11 @@ class DistanceDependentTransitions(_Transitions):
     def log_transition_matrix(self):
         Ps_dist = np.sum((self.ell[None, :, :] - self.ell[:, None, :]) ** 2,
                          axis = 2)
-        log_P = -Ps_dist / self.L
-        log_P += np.diag(self.log_p)
-        assert np.all(np.isfinite(log_P))
+        log_Ps = -Ps_dist / self.L
+        log_Ps += np.diag(self.log_p)
+        assert np.all(np.isfinite(log_Ps))
         # Normalize and return
-        return log_P - logsumexp(log_P, axis=1, keepdims=True)
+        return log_Ps - logsumexp(log_Ps, axis=1, keepdims=True)
 
     @property
     def transition_matrix(self):
@@ -472,6 +472,6 @@ class DistanceDependentTransitions(_Transitions):
     def log_transition_matrices(self, data, input, mask, tag):
         T = data.shape[0]
         # Get the normalized transition matrix
-        log_P = self.log_transition_matrix
+        log_Ps = self.log_transition_matrix
         # Tile the transition matrix for each time step
-        return np.tile(log_P[None, :, :], (T-1, 1, 1))
+        return np.tile(log_Ps[None, :, :], (T-1, 1, 1))
