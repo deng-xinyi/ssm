@@ -444,7 +444,7 @@ class DistanceDependentTransitions(_Transitions):
             ell[k, 0] = 2 * np.cos(k * 2 * np.pi / K)
             ell[k, 1] = 2 * np.sin(k * 2 * np.pi / K)
         self.ell = ell
-        self.log_p = npr.uniform(low=-0.6, high=-0.2, size=(K,))
+        self.log_p = npr.uniform(low=-3, high=-1, size=(K,))
         
 #        self.ell = npr.randn(K, J) 
 #        self.log_p = np.zeros(K)
