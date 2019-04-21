@@ -466,13 +466,13 @@ class DistanceDependentTransitions(_Transitions):
         
     @property
     def log_transition_matrix(self):
-        Ps_dist = np.sqrt(np.sum((self.ell[:, :, None] - self.ell[:, :, None].T) ** 2, axis=1))
+        Ps_dist = np.sum((self.ell[None, :, :] - self.ell[:, None, :]) ** 2,
+                         axis = 2)
         log_Ps = -Ps_dist / self.L
         log_Ps += np.diag(self.log_p)
         assert np.all(np.isfinite(log_Ps))
         # Normalize and return
-        log_Ps = log_Ps - logsumexp(log_Ps, axis=1, keepdims=True)
-        return log_Ps
+        return log_Ps - logsumexp(log_Ps, axis=1, keepdims=True)
     
     @property
     def transition_matrix(self):
