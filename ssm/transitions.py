@@ -435,10 +435,19 @@ class DistanceDependentTransitions(_Transitions):
         """
         super(DistanceDependentTransitions, self).__init__(K, D, M=M)
         self.L = L
+#        self.alpha = alpha
+#        self.kappa = kappa
 
         # Initialize the parameters
-        self.ell = npr.randn(K, J)
-        self.log_p = np.zeros(K)
+        ell = np.zeros((K, J))
+        for k in range(K):
+            ell[k, 0] = 2 * np.cos(k * 2 * np.pi / K)
+            ell[k, 1] = 2 * np.sin(k * 2 * np.pi / K)
+        self.ell = ell
+        self.log_p = npr.uniform(low=-0.6, high=-0.2, size=(K,))
+        
+#        self.ell = npr.randn(K, J) 
+#        self.log_p = np.zeros(K)
 
     @property
     def params(self):
@@ -454,17 +463,17 @@ class DistanceDependentTransitions(_Transitions):
         """
         self.ell = self.ell[perm]
         self.log_p = self.log_p[perm]
-
+        
     @property
     def log_transition_matrix(self):
-        Ps_dist = np.sum((self.ell[None, :, :] - self.ell[:, None, :]) ** 2,
-                         axis = 2)
+        Ps_dist = np.sqrt(np.sum((self.ell[:, :, None] - self.ell[:, :, None].T) ** 2, axis=1))
         log_Ps = -Ps_dist / self.L
         log_Ps += np.diag(self.log_p)
         assert np.all(np.isfinite(log_Ps))
         # Normalize and return
-        return log_Ps - logsumexp(log_Ps, axis=1, keepdims=True)
-
+        log_Ps = log_Ps - logsumexp(log_Ps, axis=1, keepdims=True)
+        return log_Ps
+    
     @property
     def transition_matrix(self):
         return np.exp(self.log_transition_matrix)
@@ -475,3 +484,13 @@ class DistanceDependentTransitions(_Transitions):
         log_Ps = self.log_transition_matrix
         # Tile the transition matrix for each time step
         return np.tile(log_Ps[None, :, :], (T-1, 1, 1))
+    
+#    def log_prior(self):
+#        K = self.K
+#        Ps = np.exp(self.log_transition_matrix)
+#
+#        lp = 0
+#        for k in range(K):
+#            alpha = self.alpha * np.ones(K) + self.kappa * (np.arange(K) == k)
+#            lp += dirichlet.logpdf(Ps[k], alpha)
+#        return lp
