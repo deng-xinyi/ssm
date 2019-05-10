@@ -9,7 +9,8 @@ from ssm.transitions import \
     RecurrentTransitions, \
     RecurrentOnlyTransitions, \
     NeuralNetworkRecurrentTransitions,\
-    DistanceDependentTransitions
+    DistanceDependentTransitions, \
+    DistanceDependentMazeTransitions
 
 from ssm.observations import \
     GaussianObservations, \
@@ -81,7 +82,8 @@ def HMM(K, D, M=0,
         recurrent=RecurrentTransitions,
         recurrent_only=RecurrentOnlyTransitions,
         nn_recurrent=NeuralNetworkRecurrentTransitions,
-        distance=DistanceDependentTransitions
+        distance=DistanceDependentTransitions,
+        mazedistance=DistanceDependentMazeTransitions
         )
     if transitions not in transition_classes:
         raise Exception("Invalid transition model: {}. Must be one of {}".
