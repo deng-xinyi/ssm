@@ -181,8 +181,20 @@ def mpp_bin(spmark, tbin_section, n_tet, n_mark, maxispk, timebin):
     
     return spmark_bin
 
+
 ###### topology constrained state model
-def create_graph(ell, ell_adj):
+####1. compute adjacency matrix
+def make_adjacency(ell):
+    K = len(ell)
+    ell_adj = np.zeros((K, K))
+    for i in range(K):
+        for j in range(K):
+            if i != j:
+                ell_adj[i, j] = (np.sqrt((ell[i, 0] - ell[j, 0])**2 + (ell[i, 1] - ell[j, 1])**2) < 25).astype(int)
+    return ell_adj
+
+####2. create graph with distance from adjacency matrix
+def make_graph(ell, ell_adj):
     K = len(ell)
     G = []
     for i in range(K):
@@ -194,6 +206,7 @@ def create_graph(ell, ell_adj):
         G.append(list(zip(node_list, node_dist)))
     return G
 
+####3. compute shortest paths between coords
 def dijkstra(G, s):
     """
     find all shortest paths from s to each other vertex in graph G
