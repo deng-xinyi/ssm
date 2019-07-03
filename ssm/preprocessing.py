@@ -181,6 +181,18 @@ def mpp_bin(spmark, tbin_section, n_tet, n_mark, maxispk, timebin):
     
     return spmark_bin
 
+###### topology constrained state model
+def create_graph(ell, ell_adj):
+    K = len(ell)
+    G = []
+    for i in range(K):
+        node_list = np.where(ell_adj[i, :] > 0)[0]
+        node_dist = np.zeros(len(node_list))
+        for j in range(node_list.shape[0]):
+            dist = np.sqrt((ell[i, 0] - ell[node_list[j], 0])**2 + (ell[i, 1] - ell[node_list[j], 1])**2)
+            node_dist[j] = dist
+        G.append(list(zip(node_list, node_dist)))
+    return G
 
 def dijkstra(G, s):
     """
