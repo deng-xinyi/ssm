@@ -183,6 +183,16 @@ def mpp_bin(spmark, tbin_section, n_tet, n_mark, maxispk, timebin):
 
 
 ###### topology constrained state model
+####0. predetermined maze coordinates
+def make_maze(ell):
+    ell[0, :] = (214.5, 142.9); ell[1, :] = (214.5, 120.25); ell[2, :] = (214.5, 105.15)
+    ell[3, :] = (214.5, 90.05); ell[4, :] = (214.5, 69.75); ell[5, :] = (194.7, 69.75)
+    ell[6, :] = (234.3, 69.75); ell[7, :] = (174.9, 69.75); ell[8, :] = (254.1, 69.75);
+    ell[9, :] = (254.1, 90.05); ell[10, :] = (254.1, 105.15); ell[11, :] = (254.1, 120.25)
+    ell[12, :] = (254.1, 142.9); ell[13, :] = (174.9, 90.05); ell[14, :] = (174.9, 105.15)
+    ell[15, :] = (174.9, 120.25); ell[16, :] = (174.9, 142.9)
+    return ell
+
 ####1. compute adjacency matrix
 def make_adjacency(ell):
     K = len(ell)
