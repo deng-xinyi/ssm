@@ -521,14 +521,11 @@ class DistanceDependentMazeTransitions(_Transitions):
     """
     In this model the transition probability depends on the _empirical_
     distance between two locations on a _known_ maze environment.
-
     Specifically, each state k has a location on a known maze \in R^J, 
     with label_k, and the probability of transitioning is
-
         Pr(z_t = k | z_{t-1} = k')
              \propto exp[-d(label_k, label_k')/L]   if k \neq k'
              \propto p_kk                             if k = k'
-
     where L is a length scale that we treat as a hyperparameter.
     """
 #    pass
@@ -550,61 +547,12 @@ class DistanceDependentMazeTransitions(_Transitions):
         
         self.log_p = np.ones(K)
         
-        ### Initialize with a known maze environment
+        ### Initialize with a known maze environment        
         ell = np.zeros((K, J))
-        ell[0, :] = (214.5, 142.9); ell[1, :] = (214.5, 120.25); ell[2, :] = (214.5, 105.15)
-        ell[3, :] = (214.5, 90.05); ell[4, :] = (214.5, 69.75); ell[5, :] = (194.7, 69.75)
-        ell[6, :] = (234.3, 69.75); ell[7, :] = (174.9, 69.75); ell[8, :] = (254.1, 69.75);
-        ell[9, :] = (254.1, 90.05); ell[10, :] = (254.1, 105.15); ell[11, :] = (254.1, 120.25)
-        ell[12, :] = (254.1, 142.9); ell[13, :] = (174.9, 90.05); ell[14, :] = (174.9, 105.15)
-        ell[15, :] = (174.9, 120.25); ell[16, :] = (174.9, 142.9)
-        
-        ### look-up table for pairwise empirical distance on maze
-        ell_dist = np.zeros((K, K))
-        for i in (0, 1, 2, 3, 4):
-            for j in (0, 1, 2, 3, 4):
-                if i != j:
-                    ell_dist[i, j] = np.abs(ell[j, 1] - ell[i, 1])
-        for i in (8, 9, 10, 11, 12):
-            for j in (8, 9, 10, 11, 12):
-                if i != j:
-                    ell_dist[i, j] = np.abs(ell[j, 1] - ell[i, 1])        
-        for i in (7, 13, 14, 15, 16):
-            for j in (7, 13, 14, 15, 16):
-                if i != j:
-                    ell_dist[i, j] = np.abs(ell[j, 1] - ell[i, 1])      
-        for i in (4, 5, 6, 7, 8):
-            for j in (4, 5, 6, 7, 8):
-                if i != j:
-                    ell_dist[i, j] = np.abs(ell[j, 0] - ell[i, 0])  
-        for i in (5, 6):
-            ell_dist[0, i] = ell_dist[0, 4] + ell_dist[4, i]
-        for i in (7, 8):
-            ell_dist[0, i] = ell_dist[0, i-2] + ell_dist[i-2, i]
-        for i in (9, 10, 11, 12):
-            ell_dist[0, i] = ell_dist[0, 8] + ell_dist[8, i]
-        for i in (13, 14, 15, 16):
-            ell_dist[0, i] = ell_dist[0, 7] + ell_dist[7, i]
-        for i in (1, 2, 3, 4):
-            for j in (8, 9, 10, 11, 12):
-                ell_dist[i, j] = ell_dist[i, 4] + ell_dist[4, 8] + ell_dist[8, j]
-        for i in (1, 2, 3, 4):
-            for j in (7, 13, 14, 15, 16):
-                ell_dist[i, j] = ell_dist[i, 4] + ell_dist[4, 7] + ell_dist[7, j]  
-        for i in (1, 2, 3):
-            for j in (5, 6):
-                ell_dist[i, j] = ell_dist[i, 4] + ell_dist[4, j]   
-        for i in (5, 6, 7):
-            for j in (9, 10, 11, 12):
-                ell_dist[i, j] = ell_dist[i, 8] + ell_dist[8, j]
-        for i in (5, 6, 8):
-            for j in (13, 14, 15, 16):
-                ell_dist[i, j] = ell_dist[i, 7] + ell_dist[7, j]
-        for i in (9, 10, 11, 12):
-            for j in (13, 14, 15, 16):
-                ell_dist[i, j] = ell_dist[i, 7] + ell_dist[7, j]
-                
-        ell_dist[np.tril_indices(K, -1)] = ell_dist.T[np.tril_indices(K, -1)]  # make the matrix symmetric
+        ell = make_maze(ell)
+        ell_adj = make_adjacency(ell)
+        G, ell_dist = make_graph(ell, ell_adj)
+
         ell_dist_sum = np.sum(ell_dist, axis=1)
         # normalized empirical distances so that comparable with diagonal log_p (~1)
         dist_norm = ell_dist / ell_dist_sum[None, :]
@@ -635,7 +583,7 @@ class DistanceDependentMazeTransitions(_Transitions):
         for i in range(K):
             for j in range(K):
                 dist_labeled[i, j] = dist_norm[self.ell_labels[i],  self.ell_labels[j]]
-                
+                #i is the likelihood state corresponding to hardcoded state ell_labels[i]
         log_Ps = -dist_labeled / self.L
         log_Ps += np.diag(self.log_p)
         assert np.all(np.isfinite(log_Ps))
@@ -653,13 +601,13 @@ class DistanceDependentMazeTransitions(_Transitions):
         # Tile the transition matrix for each time step
         return np.tile(log_Ps[None, :, :], (T-1, 1, 1))
     
-    def m_step(self, expectations, datas, inputs, masks, tags, optimizer="adam", num_iters=10, **kwargs):
+    def m_step(self, expectations, datas, inputs, masks, tags, optimizer="adam", num_iters=5, **kwargs):
         """
         to find most likely labels, ell_labels; coordinate descent
         
             {\label_k} = argmax E_{z~p(z|x)}[log p(z)]
             \likelihood(\theta) = E_{z~p(z|x)}[\sum_{t=1}^T-1 log p(z_{t+1} | z_t; \theta)]
-
+            
         weights entries are E[z_t = k], E[z_t = k, z_{t+1}=k'], log p(x_{1:T})
         """
         K = self.K
@@ -670,30 +618,36 @@ class DistanceDependentMazeTransitions(_Transitions):
         
         for itr in range(num_iters):
 
-            for k in range(K): 
+            for kk in range(K):# index kk
                 ### create null matrix with all possible values for the k-th label
                 ###    while fixing all other k-1 labels the same
+                ### I. 'changing'
+                k = ell_labels[kk]
                 ell_labels_new = np.array([ell_labels] * K)
-                ell_labels_new[:, k] = np.arange(K) 
-                dist_labeled = np.zeros((K, K))
+                ell_labels_new[:, kk] = ell_labels
+                ### II. 'swaping': add a line
+                np.fill_diagonal(ell_labels_new, np.repeat(k, K))
                 
-                ### for every possible values for the k-th label
-                for l in range(K):
+                log_L = np.zeros(K)
+                ### for every possible swapping
+                for l in range(K): # row index
                     ell_labels_new_eg = ell_labels_new[l, :]
+                    log_p_new = log_p[ell_labels_new_eg]
                     
                     ### compute log_transition matrix
-                    log_L = np.zeros(K)
+                    dist_labeled = np.zeros((K, K))
                     for i in range(K):
                         for j in range(K):
-                            dist_labeled[i, j] = dist_norm[ell_labels_new_eg[i],  ell_labels_new_eg[j]]
+                            dist_labeled[i, j] = dist_norm[ell_labels_new_eg[i], ell_labels_new_eg[j]]
+                    
                     log_Ps = -dist_labeled / L
-                    log_Ps += np.diag(log_p)
+                    log_Ps += np.diag(log_p_new)
                     log_Ps -= logsumexp(log_Ps, axis=1, keepdims=True)   
                     
                     ### compuate log_likelihood
                     log_L[l] = np.sum(zzps * log_Ps[None, :, :])
                 
                 ### update k-the label with mle
-                ell_labels[k] = np.argmax(log_L)
-        
+                ell_labels = ell_labels_new[np.argmax(log_L), :]
+                
         self.ell_labels = ell_labels
