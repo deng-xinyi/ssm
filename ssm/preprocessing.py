@@ -183,7 +183,8 @@ def mpp_bin(spmark, tbin_section, n_tet, n_mark, maxispk, timebin):
 
 
 ###### topology constrained state model
-####0. predetermined maze coordinates
+    
+#### predetermined maze coordinates
 def make_maze(ell):
     ell[0, :] = (214.5, 142.9); ell[1, :] = (214.5, 120.25); ell[2, :] = (214.5, 105.15)
     ell[3, :] = (214.5, 90.05); ell[4, :] = (214.5, 69.75); ell[5, :] = (194.7, 69.75)
@@ -192,8 +193,8 @@ def make_maze(ell):
     ell[12, :] = (254.1, 142.9); ell[13, :] = (174.9, 90.05); ell[14, :] = (174.9, 105.15)
     ell[15, :] = (174.9, 120.25); ell[16, :] = (174.9, 142.9)
     return ell
-
-####1. compute adjacency matrix
+    
+#### compute adjacency matrix
 def make_adjacency(ell):
     K = len(ell)
     ell_adj = np.zeros((K, K))
@@ -203,20 +204,22 @@ def make_adjacency(ell):
                 ell_adj[i, j] = (np.sqrt((ell[i, 0] - ell[j, 0])**2 + (ell[i, 1] - ell[j, 1])**2) < 25).astype(int)
     return ell_adj
 
-####2. create graph with distance from adjacency matrix
+#### create graph with distance from adjacency matrix
 def make_graph(ell, ell_adj):
     K = len(ell)
     G = []
+    ell_dist = np.zeros((K, K))
     for i in range(K):
         node_list = np.where(ell_adj[i, :] > 0)[0]
         node_dist = np.zeros(len(node_list))
         for j in range(node_list.shape[0]):
             dist = np.sqrt((ell[i, 0] - ell[node_list[j], 0])**2 + (ell[i, 1] - ell[node_list[j], 1])**2)
             node_dist[j] = dist
+            ell_dist[i, node_list[j]] = dist
         G.append(list(zip(node_list, node_dist)))
-    return G
+    return G, ell_dist
 
-####3. compute shortest paths between coords
+#### compute shortest paths between coords
 def dijkstra(G, s):
     """
     find all shortest paths from s to each other vertex in graph G
