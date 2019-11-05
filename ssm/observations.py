@@ -1023,15 +1023,23 @@ class MarkedPointProcessObservations(_Observations):
         # Get all the data
         data = np.vstack(datas)
 
-        # Initialize with KMeans
+        # Initialize
         from sklearn.cluster import KMeans
         spikes_n = data[:, :, :, 0]
         spikes = np.sum(spikes_n, axis=2)
         marks = data[:, :, :, 1:]
 
-        ### run K-means to find K discrete states (clusters) in total firing rates
-        km = KMeans(self.K).fit(spikes)
-        total_rates = np.minimum(km.cluster_centers_, 1e-3)
+        if tags is None:
+            ### with KMeans: run K-means to find K discrete states (clusters) in total firing rates
+            km = KMeans(self.K).fit(spikes)
+            total_rates = np.minimum(km.cluster_centers_, 1e-3) # K by tetrode
+        else:
+            ### or, use true position as initial state vector
+            z = np.vstack(tags)
+            total_rates = np.zeros((self.K, spikes.shape[1]))
+            for k in range(self.K):
+                total_rates[k, :] = np.mean(spikes[z[0, :] == k], axis=0)
+        
         self.log_lambdas = np.tile(np.log(1e-8 + total_rates[:, :, None] / self.N), (1, 1, self.N))
 
         ### initialize mark space
